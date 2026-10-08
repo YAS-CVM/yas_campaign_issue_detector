@@ -1,0 +1,84 @@
+# Configuration de Yas CVM Monitor.
+# Les chemins relatifs sont résolus depuis la racine du projet (dossier parent de config/).
+# Sévérités possibles : info < minor < major < critical
+
+paths:
+  inbox: inbox            # dossier où déposer les .xlsb du jour
+  archive: archive        # les fichiers traités y sont déplacés
+  db: data/monitor.db     # base SQLite (historique des snapshots + anomalies)
+  reports: reports        # exports CSV / Excel / HTML
+
+ingest:
+  file_glob: "*.xlsb"
+  archive_after_ingest: true
+
+detection:
+  # Conversions Push jugées seulement quand l'envoi a au moins N jours (fenêtre d'attribution)
+  maturity_days: 3
+  # Au-delà de ce volume de clients / messages impactés, la sévérité monte d'un cran
+  critical_volume: 500000
+  # En dessous de ce volume, la sévérité descend à « minor »
+  low_volume: 1000
+  # Catégories sans objectif de conversion : exclues des règles de performance
+  non_conversion_categories: [Informative, Engagements]
+  # Broadcasts « Is Seeding = Yes » (bonus crédités directement) exclus des règles de conversion
+  exclude_seeding_from_conversion: true
+  # BC techniques (pas de vrai message) exclus des règles de livraison / performance
+  technical_bc_patterns: ["Dummy BC"]
+  # Nombre de jours récents évalués par les règles IM agrégées
+  im_lookback_days: 7
+  baseline:
+    window_days: 14       # historique utilisé pour la médiane
+    min_points: 5         # nombre minimum de jours d'historique
+    z_threshold: 3.5      # écart robuste (médiane/MAD) au-delà duquel on alerte
+
+rules:
+  # ---- Push : exécution ----
+  PM-EXE-01: {enabled: true, severity: critical, min_generated: 1000}      # bloqué en Delivering
+  PM-EXE-02: {enabled: true, severity: major}                              # Aborted / Delivery Stalled
+  PM-EXE-03: {enabled: true, severity: major, min_days: 1}                 # en pause (récurrent si > 1 j)
+  PM-EXE-04: {enabled: true, severity: minor, max_severity: major}         # blackout
+  PM-EXE-05: {enabled: true, severity: major, min_generated: 1000}         # ciblé mais non envoyé
+  # ---- Push : livraison ----
+  PM-DLV-01: {enabled: true, severity: major, min_sent: 100}               # livraison nulle
+  PM-DLV-02: {enabled: true, severity: major, min_sent: 10000}             # chute Delivery % (baseline)
+  PM-DLV-03: {enabled: true, severity: minor, min_sent: 1000, max_ack_rate: 0.90}
+  # ---- Push : performance ----
+  PM-PRF-01: {enabled: true, severity: minor, min_sent: 1000}              # zéro conversion
+  PM-PRF-02: {enabled: true, severity: minor, min_cg: 1000, min_cg_conversions: 30, p_value: 0.05}
+  PM-PRF-03: {enabled: true, severity: major, min_failures: 10, max_failure_rate: 0.20}
+  # ---- Push : qualité de données ----
+  PM-DQ-01: {enabled: true, severity: minor}                               # Sent > Generated
+  PM-DQ-02: {enabled: true, severity: minor}                               # Conversions > Sent (campagne)
+  PM-DQ-03: {enabled: true, severity: minor}                               # Fulfillment > Conversions
+  PM-DQ-04: {enabled: true, severity: minor, min_sent: 1000}               # pas de groupe de contrôle
+  PM-DQ-05: {enabled: true, severity: info}                                # colonne entièrement vide
+  PM-DQ-06: {enabled: true, severity: major}                               # jour manquant
+  # ---- Inbound ----
+  IM-FUL-01: {enabled: true, severity: major, min_attempts: 500, max_failure_rate: 0.50, critical_failure_rate: 0.90}
+  IM-FUL-02: {enabled: true, severity: major, min_attempts: 5000}          # hausse du taux d'échec global
+  IM-IMP-01: {enabled: true, severity: major, min_impressions: 1000}       # impressions sans succès
+  IM-IMP-02: {enabled: true, severity: major, min_impressions: 10000}      # chute d'impressions
+  IM-DQ-01: {enabled: true, severity: info, max_ratio: 0.01}               # Conversions IM non tracées
+  IM-DQ-02: {enabled: true, severity: minor, min_impressions: 1000}        # canal sans résultat
+  IM-DQ-03: {enabled: true, severity: major}                               # données IM en retard
+  # ---- Comparaison de snapshots ----
+  SNP-01: {enabled: true, severity: major}                                 # volumétrie figée modifiée
+  SNP-02: {enabled: true, severity: major}                                 # broadcast disparu
+  SNP-03: {enabled: true, severity: minor}                                 # données IM passées révisées
+
+notify:
+  dashboard_url: http://localhost:8501
+  # Pas de nouvelle alerte pour une anomalie déjà notifiée avant N jours (sauf aggravation)
+  realert_after_days: 3
+  teams:
+    enabled: true
+    min_severity: major       # seules les nouvelles anomalies >= ce niveau sont postées
+    max_items: 5
+  email:
+    enabled: true
+    backend: smtp             # smtp | outlook (Windows, Outlook installé)
+    min_severity: minor       # niveau minimum listé dans le récapitulatif
+    subject_prefix: "[Yas CVM Monitor]"
+    attach_csv: true
+    send_when_nothing_new: true

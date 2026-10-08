@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>{{ title }}</title></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:Segoe UI,Arial,sans-serif;color:#1f2328;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">
+<tr><td align="center">
+<table role="presentation" width="720" cellpadding="0" cellspacing="0" style="max-width:720px;width:100%;background:#ffffff;border-radius:8px;">
+  <tr><td style="padding:24px 28px 8px;">
+    <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Yas CVM Monitor</div>
+    <h1 style="margin:4px 0 0;font-size:22px;">{{ title }}</h1>
+    <div style="font-size:13px;color:#6b7280;margin-top:4px;">Fichier : {{ file_name }} · données du {{ date_min }} au {{ date_max }}</div>
+  </td></tr>
+
+  {% if kpis %}
+  <tr><td style="padding:16px 28px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    {% for k in kpis %}
+      <td style="padding:10px;border:1px solid #e5e7eb;border-radius:6px;width:{{ (100 / kpis|length)|round(0) }}%;">
+        <div style="font-size:11px;color:#6b7280;">{{ k.label }}</div>
+        <div style="font-size:18px;font-weight:600;">{{ k.value }}</div>
+        {% if k.delta %}<div style="font-size:11px;color:{{ k.color }};">{{ k.delta }} vs 7 j</div>{% endif %}
+      </td>
+    {% endfor %}
+    </tr></table>
+    <div style="font-size:11px;color:#6b7280;margin-top:6px;">{{ kpi_date }}</div>
+  </td></tr>
+  {% endif %}
+
+  <tr><td style="padding:20px 28px 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    {% for s in severities %}
+      <td style="padding:6px 12px;margin-right:6px;border-radius:14px;background:{{ s.bg }};color:{{ s.fg }};font-size:13px;font-weight:600;">{{ s.label }} : {{ s.count }}</td><td width="8"></td>
+    {% endfor %}
+    </tr></table>
+    <div style="font-size:13px;color:#374151;margin-top:10px;">{{ sync_summary }}</div>
+  </td></tr>
+
+  {% for section in sections if section.rows %}
+  <tr><td style="padding:22px 28px 0;">
+    <h2 style="font-size:16px;margin:0 0 8px;">{{ section.title }} ({{ section.rows|length }})</h2>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+      {% for r in section.rows[:section.limit] %}
+      <tr style="border-top:1px solid #e5e7eb;">
+        <td style="padding:8px 8px 8px 0;vertical-align:top;white-space:nowrap;">
+          <span style="display:inline-block;padding:2px 8px;border-radius:10px;background:{{ colors[r.severity].bg }};color:{{ colors[r.severity].fg }};font-size:11px;font-weight:600;">{{ labels[r.severity] }}</span>
+        </td>
+        <td style="padding:8px 0;vertical-align:top;">
+          <div style="font-weight:600;">{{ r.rule_id }} · {{ r.rule_name }}</div>
+          <div style="color:#374151;">{{ r.message }}</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if section.rows|length > section.limit %}<div style="font-size:12px;color:#6b7280;margin-top:6px;">+ {{ section.rows|length - section.limit }}</div>{% endif %}
+  </td></tr>
+  {% endfor %}
+
+  <tr><td style="padding:24px 28px 28px;font-size:12px;color:#6b7280;">
+    {% if dashboard_url %}<a href="{{ dashboard_url }}" style="color:#2563eb;">Ouvrir le tableau de bord</a> · {% endif %}
+    Yas CVM Monitor
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>
