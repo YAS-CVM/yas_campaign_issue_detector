@@ -45,7 +45,7 @@ def build_card(title: str, subtitle: str, items: pd.DataFrame, counts: dict[str,
         "type": "AdaptiveCard", "version": "1.4", "msteams": {"width": "Full"}, "body": body,
     }
     if dashboard_url:
-        card["actions"] = [{"type": "Action.OpenUrl", "title": "Ouvrir le tableau de bord", "url": dashboard_url}]
+        card["actions"] = [{"type": "Action.OpenUrl", "title": "Ouvrir le dashbord", "url": dashboard_url}]
     return card
 
 

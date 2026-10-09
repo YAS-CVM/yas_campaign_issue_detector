@@ -34,8 +34,8 @@ def push_daily(df: pd.DataFrame) -> pd.DataFrame:
 
 def im_daily(df: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
     keys = ["date"] + (by or [])
-    if df.empty:
-        return pd.DataFrame(columns=keys)
+    if df.empty:  # mêmes colonnes que le cas normal : les appelants (headline, API) peuvent lire les mesures
+        return pd.DataFrame(columns=keys + ["impressions", "fulfillment_success", "fulfillment_failures", "take_rate", "failure_rate"])
     out = df.groupby(keys)[["impressions", "fulfillment_success", "fulfillment_failures"]].sum().reset_index()
     attempts = out["fulfillment_success"] + out["fulfillment_failures"]
     out["take_rate"] = out["fulfillment_success"] / out["impressions"].where(out["impressions"] > 0)
@@ -98,8 +98,8 @@ def headline(push: pd.DataFrame, im: pd.DataFrame, day: str | None = None) -> di
     ):
         cur = frame.loc[frame["date"] == day, col]
         prev = frame.loc[frame["date"] < day, col].tail(7)
-        value = float(cur.iloc[0]) if len(cur) else None
-        ref = float(prev.mean()) if len(prev) else None
+        value = float(cur.iloc[0]) if len(cur) and pd.notna(cur.iloc[0]) else None
+        ref = float(prev.mean()) if len(prev) and pd.notna(prev.mean()) else None
         out[name] = {"value": value, "ref7": ref,
                      "delta": (value - ref) / ref if value is not None and ref else None}
     return out

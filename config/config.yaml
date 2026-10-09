@@ -27,26 +27,32 @@ detection:
   technical_bc_patterns: ["Dummy BC"]
   # Nombre de jours récents évalués par les règles IM agrégées
   im_lookback_days: 7
-  baseline:
-    window_days: 14       # historique utilisé pour la médiane
-    min_points: 5         # nombre minimum de jours d'historique
-    z_threshold: 3.5      # écart robuste (médiane/MAD) au-delà duquel on alerte
+  # Seuils relatifs par percentiles (remplacent les seuils fixes ; ceux-ci restent le repli si trop peu de données)
+  percentiles:
+    low: 5                  # métrique « bas = mauvais » : alerte sous ce percentile
+    median: 50              # repère central affiché dans les alertes
+    normal_high: 75         # borne haute de la plage normale (contexte)
+    high: 95                # métrique « haut = mauvais » : alerte au-dessus de ce percentile
+    min_peers: 20           # taille minimale d'un groupe de pairs (sinon population globale, puis seuil fixe)
+    min_history_points: 10  # jours d'historique minimaux pour les séries journalières
+    history_window_days: 28 # fenêtre d'historique glissante des séries journalières
+    fallback_to_static: true
 
 rules:
   # ---- Push : exécution ----
   PM-EXE-01: {enabled: true, severity: critical, min_generated: 1000}      # bloqué en Delivering
   PM-EXE-02: {enabled: true, severity: major}                              # Aborted / Delivery Stalled
   PM-EXE-03: {enabled: true, severity: major, min_days: 1}                 # en pause (récurrent si > 1 j)
-  PM-EXE-04: {enabled: true, severity: minor, max_severity: major}         # blackout
+  PM-EXE-04: {enabled: true, severity: info, max_severity: info}           # blackout : attendu, consultation seule (pas de mail/Teams)
   PM-EXE-05: {enabled: true, severity: major, min_generated: 1000}         # ciblé mais non envoyé
   # ---- Push : livraison ----
-  PM-DLV-01: {enabled: true, severity: major, min_sent: 100}               # livraison nulle
-  PM-DLV-02: {enabled: true, severity: major, min_sent: 10000}             # chute Delivery % (baseline)
-  PM-DLV-03: {enabled: true, severity: minor, min_sent: 1000, max_ack_rate: 0.90}
+  PM-DLV-01: {enabled: true, severity: major, min_sent: 100, min_abs_gap: 0.05}   # Delivery% < P5 des pairs (static : Delivered = 0)
+  PM-DLV-02: {enabled: true, severity: major, min_sent: 10000, min_abs_gap: 0.10}  # Delivery% < P5 de l'historique (major si 2 jours de suite)
+  PM-DLV-03: {enabled: true, severity: minor, min_sent: 1000, max_ack_rate: 0.90, min_abs_gap: 0.05}  # Ack% < P5 des pairs
   # ---- Push : performance ----
-  PM-PRF-01: {enabled: true, severity: minor, min_sent: 1000}              # zéro conversion
+  PM-PRF-01: {enabled: true, severity: minor, min_sent: 1000, min_abs_gap: 0.002}  # Conv% < P5 des pairs (static : Conv = 0)
   PM-PRF-02: {enabled: true, severity: minor, min_cg: 1000, min_cg_conversions: 30, p_value: 0.05}
-  PM-PRF-03: {enabled: true, severity: major, min_failures: 10, max_failure_rate: 0.20}
+  PM-PRF-03: {enabled: true, severity: major, min_failures: 10, max_failure_rate: 0.20, min_abs_gap: 0.05}  # Failure% > P95 des pairs
   # ---- Push : qualité de données ----
   PM-DQ-01: {enabled: true, severity: minor}                               # Sent > Generated
   PM-DQ-02: {enabled: true, severity: minor}                               # Conversions > Sent (campagne)
@@ -55,10 +61,10 @@ rules:
   PM-DQ-05: {enabled: true, severity: info}                                # colonne entièrement vide
   PM-DQ-06: {enabled: true, severity: major}                               # jour manquant
   # ---- Inbound ----
-  IM-FUL-01: {enabled: true, severity: major, min_attempts: 500, max_failure_rate: 0.50, critical_failure_rate: 0.90}
-  IM-FUL-02: {enabled: true, severity: major, min_attempts: 5000}          # hausse du taux d'échec global
-  IM-IMP-01: {enabled: true, severity: major, min_impressions: 1000}       # impressions sans succès
-  IM-IMP-02: {enabled: true, severity: major, min_impressions: 10000}      # chute d'impressions
+  IM-FUL-01: {enabled: true, severity: major, min_attempts: 500, max_failure_rate: 0.50, critical_failure_rate: 0.90, min_abs_gap: 0.10}  # Failure% > P95 des pairs du touchpoint
+  IM-FUL-02: {enabled: true, severity: major, min_attempts: 5000, min_abs_gap: 0.02}  # Failure% > P95 de l'historique
+  IM-IMP-01: {enabled: true, severity: major, min_impressions: 1000, min_abs_gap: 0.05}  # taux de fulfillment < P5 des pairs
+  IM-IMP-02: {enabled: true, severity: major, min_impressions: 10000, min_rel_gap: 0.30}  # impressions < P5 de l'historique
   IM-DQ-01: {enabled: true, severity: info, max_ratio: 0.01}               # Conversions IM non tracées
   IM-DQ-02: {enabled: true, severity: minor, min_impressions: 1000}        # canal sans résultat
   IM-DQ-03: {enabled: true, severity: major}                               # données IM en retard
@@ -68,7 +74,7 @@ rules:
   SNP-03: {enabled: true, severity: minor}                                 # données IM passées révisées
 
 notify:
-  dashboard_url: http://localhost:8501
+  dashboard_url: http://10.0.112.217:8000
   # Pas de nouvelle alerte pour une anomalie déjà notifiée avant N jours (sauf aggravation)
   realert_after_days: 3
   teams:

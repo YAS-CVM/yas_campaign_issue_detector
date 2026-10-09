@@ -228,37 +228,20 @@ def preview(config: Optional[Path] = ConfigOpt):
 @app.command("notify-test")
 def notify_test(config: Optional[Path] = ConfigOpt):
     """Envoie un message de test sur chaque canal configuré."""
-    import pandas as pd
-
-    from .notify import email as mail
-    from .notify import teams
+    from .services import alerts
     cfg = _setup(config)
-    webhook = cfg.env("TEAMS_WEBHOOK_URL")
-    if webhook:
-        items = pd.DataFrame([{"severity": "info", "rule_id": "TEST", "rule_name": "Message de test",
-                               "message": "Si vous lisez ceci, les alertes Teams fonctionnent."}])
-        try:
-            teams.post_card(webhook, teams.build_card("Yas CVM Monitor : test", "Vérification du webhook",
-                                                      items, {}, cfg.notify.get("dashboard_url")))
-            typer.secho("Teams : OK", fg="green")
-        except Exception as e:
-            typer.secho(f"Teams : ERREUR {e}", fg="red")
-    else:
-        typer.echo("Teams : non configuré (TEAMS_WEBHOOK_URL)")
-    if mail.is_configured(cfg):
-        try:
-            mail.send_email(cfg, "[Yas CVM Monitor] Test", "<p>Les alertes e-mail fonctionnent.</p>",
-                            "Les alertes e-mail fonctionnent.")
-            typer.secho(f"E-mail : OK ({', '.join(mail.recipients(cfg))})", fg="green")
-        except Exception as e:
-            typer.secho(f"E-mail : ERREUR {e}", fg="red")
-    else:
-        typer.echo("E-mail : non configuré (MAIL_TO / SMTP_HOST)")
+    status = alerts.channel_status(cfg)
+    for channel, label in (("teams", "Teams"), ("email", "E-mail")):
+        if not status[channel]["configured"]:
+            typer.echo(f"{label} : non configuré ({', '.join(status[channel]['missing'])})")
+            continue
+        res = alerts.send_test(cfg, channel)
+        typer.secho(f"{label} : {'OK' if res['ok'] else 'ERREUR'} — {res['message']}", fg="green" if res["ok"] else "red")
 
 
 @app.command()
 def dashboard(
-    port: int = typer.Option(8501),
+    port: int = typer.Option(8000),
     config: Optional[Path] = ConfigOpt,
 ):
     """Lance le tableau de bord Streamlit."""
@@ -268,6 +251,29 @@ def dashboard(
            "--browser.gatherUsageStats", "false"]
     env = {**os.environ, "CVM_MONITOR_CONFIG": str(cfg.config_path)}
     raise typer.Exit(subprocess.call(cmd, env=env))
+
+
+@app.command()
+def serve(
+    port: int = typer.Option(8000),
+    host: str = typer.Option("0.0.0.0", help="Interface d'écoute : 0.0.0.0 = toutes (accessible depuis le réseau), 127.0.0.1 = local seulement."),
+    reload: bool = typer.Option(False, help="Rechargement auto (développement)."),
+    config: Optional[Path] = ConfigOpt,
+):
+    """Lance l'API FastAPI (et sert web/dist s'il existe)."""
+    import socket
+
+    import uvicorn
+    cfg = _setup(config)
+    os.environ["CVM_MONITOR_CONFIG"] = str(cfg.config_path)
+    if host in ("0.0.0.0", "::"):
+        try:
+            lan = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            lan = None
+        typer.echo(f"Live on http://localhost:{port}" + (f" and http://{lan}:{port} (network)" if lan else ""))
+        typer.secho("Attention : No authentification", fg="yellow")
+    uvicorn.run("cvm_monitor.api.main:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

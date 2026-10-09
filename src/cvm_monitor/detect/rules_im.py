@@ -7,7 +7,7 @@ from datetime import timedelta
 import pandas as pd
 
 from .base import Anomaly, RuleContext, fmt_int, fmt_pct, rule
-from .baseline import robust_zscores
+from . import percentiles as pct
 
 
 def _period_start(ctx: RuleContext) -> str:
@@ -32,81 +32,119 @@ def _by_rule(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+def _peers(ctx: RuleContext, p: dict, table: pd.DataFrame, col: str, direction: str, static_mask: pd.Series,
+           default_gap: float) -> pd.DataFrame:
+    """Règles IM hors norme vs pairs du même touchpoint (ou seuil fixe si mode = static)."""
+    if p.get("mode", "percentile") == "static":
+        out = table.copy()
+        out["flag"], out["mode"], out["n"] = static_mask, "static", 0
+        for c in ("p_low", "p50", "p_normal_high", "p_high"):
+            out[c] = float("nan")
+        return out
+    return pct.peer_outliers(table, col, "touchpoint", direction, pct.settings(ctx.det),
+                             p.get("min_abs_gap", default_gap), static_mask)
+
+
+def _position(r, direction: str) -> str:
+    return "seuil fixe" if r["mode"] == "static" else pct.describe(r, direction, fmt_pct)
+
+
 @rule("IM-FUL-01", "Program Rule : Fulfillment Failures", "im", "major",
-      min_attempts=500, max_failure_rate=0.50, critical_failure_rate=0.90)
+      min_attempts=500, max_failure_rate=0.50, critical_failure_rate=0.90, min_abs_gap=0.10)
 def rule_fulfillment_failure(ctx: RuleContext, p: dict):
     window = ctx.det.get("im_lookback_days", 7)
     agg = _by_rule(_recent(ctx))
-    agg = agg[(agg["attempts"] >= p["min_attempts"]) & (agg["fail_rate"] >= p["max_failure_rate"])]
-    for rule_id, r in agg.iterrows():
+    agg = agg[agg["attempts"] >= p["min_attempts"]].copy()
+    if agg.empty:
+        return
+    res = _peers(ctx, p, agg, "fail_rate", pct.HIGH, agg["fail_rate"] >= p["max_failure_rate"], p["min_abs_gap"])
+    for rule_id, r in res[res["flag"]].iterrows():
         sev = "critical" if r["fail_rate"] >= p["critical_failure_rate"] else ctx.scaled(p["severity"], r["failures"])
         yield Anomaly(
             entity_type="im_rule", entity_key=str(rule_id), date=_period_start(ctx), category=r["program"],
             severity=sev, metric="fulfillment_failure_rate", value=round(r["fail_rate"], 4),
-            expected=f"< {fmt_pct(p['max_failure_rate'])}", volume=int(r["failures"]),
+            expected=(f"< {fmt_pct(p['max_failure_rate'])}" if r["mode"] == "static"
+                      else f"< {fmt_pct(r['p_high'])} (P95 des pairs {r['touchpoint']})"),
+            volume=int(r["failures"]),
             message=(f"« {r['rule_name']} » ({r['touchpoint']}, {r['offer']}) : Fulfillment Failures% "
                      f"{fmt_pct(r['fail_rate'])} sur {window} j (Fulfillment Failures {fmt_int(r['failures'])}, "
-                     f"Fulfillment Success {fmt_int(r['success'])})."),
+                     f"Fulfillment Success {fmt_int(r['success'])}). {_position(r, pct.HIGH)}."),
             details={"program": r["program"], "offer": r["offer"], "success": int(r["success"]),
-                     "failures": int(r["failures"]), "impressions": int(r["impressions"])},
+                     "failures": int(r["failures"]), "impressions": int(r["impressions"]), **pct.info(r)},
         )
 
 
-@rule("IM-FUL-02", "Hausse du Fulfillment Failures%", "im", "major", min_attempts=5000)
+@rule("IM-FUL-02", "Hausse du Fulfillment Failures%", "im", "major", min_attempts=5000, min_abs_gap=0.02)
 def global_failure_rise(ctx: RuleContext, p: dict):
-    b = ctx.det.get("baseline", {})
+    pc = pct.settings(ctx.det)
     daily = ctx.hist_im.groupby("date")[["fulfillment_success", "fulfillment_failures"]].sum().sort_index()
     attempts = daily.sum(axis=1)
     rate = (daily["fulfillment_failures"] / attempts).where(attempts >= p["min_attempts"])
-    z = robust_zscores(rate, b.get("window_days", 14), b.get("min_points", 5))
+    res = pct.history_outliers(rate, pct.HIGH, pc, min_abs_gap=p["min_abs_gap"])
     current = set(ctx.im["date"])
-    for day, row in z[(z["z"] >= b.get("z_threshold", 3.5)) & z.index.isin(current)].iterrows():
-        extra = int(attempts[day] * (row["value"] - row["median"]))
+    for run in pct.runs(res, current):
+        first, last, days = run.index[0], run.index[-1], len(run)
+        extra = int((attempts[run.index] * (run["value"] - run["p50"])).sum())
+        worst = run.loc[run["value"].idxmax()]
+        base = p["severity"] if days > 1 else "minor"
+        when = f"le {first}" if days == 1 else f"du {first} au {last} ({days} jours)"
         yield Anomaly(
-            entity_type="global", entity_key="IM", date=day, severity=ctx.scaled(p["severity"], extra),
-            metric="fulfillment_failure_rate", value=round(row["value"], 4), expected=f"≈ {fmt_pct(row['median'])}",
-            volume=extra,
-            message=(f"Fulfillment Failures% le {day} : {fmt_pct(row['value'])} contre {fmt_pct(row['median'])} "
-                     f"habituellement (z = {row['z']:.1f}), ~{fmt_int(extra)} Fulfillment Failures en plus."),
-            details={"attempts": int(attempts[day]), "z": round(row["z"], 2)},
+            entity_type="global", entity_key="IM", date=first, severity=ctx.scaled(base, extra),
+            metric="fulfillment_failure_rate", value=round(worst["value"], 4),
+            expected=f"≤ {fmt_pct(worst['p_high'])} (P95 historique)", volume=extra,
+            message=(f"Fulfillment Failures% {when} : {fmt_pct(worst['value'])} au plus haut, au-dessus du P95 "
+                     f"historique {fmt_pct(worst['p_high'])} (médiane {fmt_pct(worst['p50'])}), ~{fmt_int(extra)} "
+                     f"Fulfillment Failures en plus."),
+            details={"days": run.index.tolist(), "last_date": last, **pct.info(worst)},
         )
 
 
-@rule("IM-IMP-01", "Impression sans Fulfillment", "im", "major", min_impressions=1000)
+@rule("IM-IMP-01", "Impression sans Fulfillment", "im", "major", min_impressions=1000, min_abs_gap=0.05)
 def impressions_without_success(ctx: RuleContext, p: dict):
     window = ctx.det.get("im_lookback_days", 7)
     agg = _by_rule(_recent(ctx))
-    agg = agg[(agg["impressions"] >= p["min_impressions"]) & (agg["attempts"] == 0)]
-    for rule_id, r in agg.iterrows():
+    agg = agg[agg["impressions"] >= p["min_impressions"]].copy()
+    if agg.empty:
+        return
+    agg["attempt_rate"] = agg["attempts"] / agg["impressions"]
+    res = _peers(ctx, p, agg, "attempt_rate", pct.LOW, agg["attempts"] == 0, p["min_abs_gap"])
+    for rule_id, r in res[res["flag"]].iterrows():
         yield Anomaly(
             entity_type="im_rule", entity_key=str(rule_id), date=_period_start(ctx), category=r["program"],
-            severity=ctx.scaled(p["severity"], r["impressions"]), metric="fulfillment_attempts", value=0,
-            expected="> 0", volume=int(r["impressions"]),
+            severity=ctx.scaled(p["severity"], r["impressions"]), metric="fulfillment_attempt_rate",
+            value=round(r["attempt_rate"], 4),
+            expected="> 0" if r["mode"] == "static" else f"> {fmt_pct(r['p_low'])}", volume=int(r["impressions"]),
             message=(f"« {r['rule_name']} » ({r['touchpoint']}) : Impression {fmt_int(r['impressions'])}, "
-                     f"Fulfillment Success 0, Fulfillment Failures 0 sur {window} j."),
-            details={"program": r["program"], "offer": r["offer"]},
+                     f"Fulfillment {fmt_int(r['attempts'])} ({fmt_pct(r['attempt_rate'])}) sur {window} j. "
+                     f"{_position(r, pct.LOW)}."),
+            details={"program": r["program"], "offer": r["offer"], **pct.info(r)},
         )
 
 
-@rule("IM-IMP-02", "Chute des Impression", "im", "major", min_impressions=10000)
+@rule("IM-IMP-02", "Chute des Impression", "im", "major", min_impressions=10000, min_rel_gap=0.30)
 def impressions_drop(ctx: RuleContext, p: dict):
-    b = ctx.det.get("baseline", {})
+    pc = pct.settings(ctx.det)
     current = set(ctx.im["date"])
     for dim in ("touchpoint", "program"):
         daily = ctx.hist_im.groupby([dim, "date"])["impressions"].sum()
         for key, s in daily.groupby(level=0):
             s = s.droplevel(0).sort_index()
-            z = robust_zscores(s, b.get("window_days", 14), b.get("min_points", 5))
-            flagged = z[(z["z"] <= -b.get("z_threshold", 3.5)) & (z["median"] >= p["min_impressions"])
-                        & z.index.isin(current)]
-            for day, row in flagged.iterrows():
-                lost = int(row["median"] - row["value"])
+            res = pct.history_outliers(s, pct.LOW, pc, min_rel_gap=p["min_rel_gap"])
+            res = res[res["p50"] >= p["min_impressions"]]
+            for run in pct.runs(res, current):
+                first, last, days = run.index[0], run.index[-1], len(run)
+                lost = int((run["p50"] - run["value"]).sum())
+                worst = run.loc[run["value"].idxmin()]
+                base = p["severity"] if days > 1 else "minor"
+                when = f"le {first}" if days == 1 else f"du {first} au {last} ({days} jours)"
                 yield Anomaly(
-                    entity_type=dim, entity_key=str(key), date=day, category=str(key) if dim == "program" else None,
-                    severity=ctx.scaled(p["severity"], lost), metric="impressions", value=row["value"],
-                    expected=f"≈ {fmt_int(row['median'])}", volume=lost,
-                    message=(f"Impression {dim.capitalize()} « {key} » le {day} : {fmt_int(row['value'])} contre "
-                             f"{fmt_int(row['median'])} habituellement (z = {row['z']:.1f})."),
+                    entity_type=dim, entity_key=str(key), date=first, category=str(key) if dim == "program" else None,
+                    severity=ctx.scaled(base, lost), metric="impressions", value=worst["value"],
+                    expected=f"≥ {fmt_int(worst['p_low'])} (P5 historique)", volume=lost,
+                    message=(f"Impression {dim.capitalize()} « {key} » {when} : {fmt_int(worst['value'])} au plus bas, "
+                             f"sous le P5 historique {fmt_int(worst['p_low'])} (médiane {fmt_int(worst['p50'])}), "
+                             f"~{fmt_int(lost)} Impression en moins."),
+                    details={"days": run.index.tolist(), "last_date": last, **pct.info(worst)},
                 )
 
 

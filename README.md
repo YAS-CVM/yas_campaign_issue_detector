@@ -61,7 +61,7 @@ Un fichier déjà importé est reconnu et ignoré.
    et les alertes sont envoyées. Un fichier déjà traité est ignoré (contrôle par empreinte).
 3. Consulter :
    ```bash
-   cvm-monitor dashboard          # http://localhost:8501
+   cvm-monitor dashboard          # http://localhost:8000
    ```
 
 ### Première utilisation : charger l'historique
@@ -86,7 +86,7 @@ comparaison à l'historique (médiane glissante) et la courbe de maturité des c
 | `cvm-monitor report --period week\|month` | Rapport Excel : KPI, scorecards campagnes, règles IM, anomalies |
 | `cvm-monitor preview` | Écrit l'e-mail récapitulatif en HTML, sans l'envoyer |
 | `cvm-monitor notify-test` | Envoie un message de test sur Teams et par e-mail |
-| `cvm-monitor dashboard [--port 8501]` | Lance le tableau de bord |
+| `cvm-monitor dashboard [--port 8000]` | Lance le tableau de bord |
 
 ---
 

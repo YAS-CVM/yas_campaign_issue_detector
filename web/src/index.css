@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+/* Identité Yas : bleu marine #00377D, jaune #FFD100, encre #222A33, Figtree. */
+:root {
+  --bg: #f4f7fa; --surface: #ffffff; --ink: #222a33; --muted: #5b6674; --faint: #8a95a3; --line: #e1e8f0;
+  --brand: #00377d; --brand-ink: #ffffff; --yellow: #ffd100; --accent: #00377d; --tint: #e7eef6;
+  --good: #1e8e3e; --warn: #b46e00; --major: #ec835a; --critical: #c0392b; --info: #8a95a3;
+  --shadow: 0 1px 2px rgba(0, 55, 125, .06), 0 4px 16px rgba(0, 55, 125, .06);
+  color-scheme: light;
+}
+html { scrollbar-gutter: stable; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: Figtree, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.field { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px; font-size: 12px; background: var(--tint); color: var(--accent); }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Mode rapport : A4, sans éléments interactifs. */
+.print-only { display: none; }
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body { background: #fff; color: #000; }
+  .no-print { display: none !important; }
+  .print-only { display: block; }
+  .card { box-shadow: none; break-inside: avoid; }
+  header.app-header { position: static !important; }
+}
+
+.skeleton { border-radius: 10px; background: linear-gradient(90deg, var(--tint) 25%, var(--bg) 50%, var(--tint) 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }

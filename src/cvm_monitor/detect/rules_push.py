@@ -5,9 +5,10 @@ from __future__ import annotations
 import pandas as pd
 
 from ..analytics.uplift import two_proportion_test
+from ..config import severity_rank
 from .base import Anomaly, RuleContext, fmt_int, fmt_pct, rule
 from ..ingest.schema import PUSH_COLUMNS
-from .baseline import robust_zscores
+from . import percentiles as pct
 
 SOURCE_NAME = {v: k for k, v in PUSH_COLUMNS.items()}
 
@@ -89,7 +90,7 @@ def blackout(ctx: RuleContext, p: dict):
         undelivered = max(r.sent - r.delivered, 0)
         vol = unsent if unsent is not None else undelivered
         sev = ctx.scaled(p["severity"], vol)
-        if sev == "critical" and p.get("max_severity"):
+        if p.get("max_severity") and severity_rank(sev) > severity_rank(p["max_severity"]):
             sev = p["max_severity"]
         detail = (f"Generated − Sent = {fmt_int(unsent)}" if unsent is not None
                   else f"Sent − Delivered = {fmt_int(undelivered)}")
@@ -118,25 +119,77 @@ def generated_not_sent(ctx: RuleContext, p: dict):
 
 # --------------------------------------------------------------------------- livraison
 
-@rule("PM-DLV-01", "Delivered = 0", "push", "major", min_sent=100)
+def _bc_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Une ligne par BC Name : volumes sommés, broadcasts et dates concernés."""
+    return df.groupby("bc_name", sort=False).agg(
+        category=("category", "first"), campaign=("campaign_name", "first"), status=("status", "last"),
+        sent=("sent", "sum"), delivered=("delivered", "sum"), acknowledged=("acknowledged", "sum"),
+        conversions=("conversions", "sum"), failures=("fulfillment_failure", "sum"),
+        success=("fulfillment_success", "sum"), first=("date", "min"), last=("date", "max"),
+        broadcast_ids=("broadcast_id", list), dates=("date", lambda s: sorted(set(s))),
+    )
+
+
+def _detect(ctx: RuleContext, p: dict, table: pd.DataFrame, col: str, direction: str, static_mask: pd.Series,
+            default_gap: float) -> pd.DataFrame:
+    """Lignes hors norme : percentiles des pairs (même catégorie), ou seuil fixe si mode = static."""
+    if p.get("mode", "percentile") == "static":
+        out = table.copy()
+        out["flag"], out["mode"], out["n"] = static_mask, "static", 0
+        for c in ("p_low", "p50", "p_normal_high", "p_high"):
+            out[c] = float("nan")
+        return out
+    return pct.peer_outliers(table, col, "category", direction, pct.settings(ctx.det),
+                             p.get("min_abs_gap", default_gap), static_mask)
+
+
+def _position(r, direction: str) -> str:
+    return "seuil fixe" if r["mode"] == "static" else pct.describe(r, direction, fmt_pct)
+
+
+@rule("PM-DLV-01", "Delivery% anormalement bas", "push", "major", min_sent=100, min_abs_gap=0.05)
 def zero_delivery(ctx: RuleContext, p: dict):
     df = ctx.business(ctx.push)
-    df = df[(df["sent"] >= p["min_sent"]) & (df["delivered"] == 0) & (df["status"] != "Delivering")]
-    for bc, g, first, last, days in _episodes_by_bc(df):
-        sent = int(g["sent"].sum())
+    df = df[(df["sent"] >= p["min_sent"]) & (df["status"] != "Delivering")]
+    if df.empty:
+        return
+    t = _bc_table(df)
+    t["rate"] = t["delivered"] / t["sent"]
+    res = _detect(ctx, p, t, "rate", pct.LOW, t["delivered"] == 0, p["min_abs_gap"])
+    flagged = res[res["flag"]]
+    # Plancher structurel : si P5 = 0, ces BC à 0 % ne sont pas des écarts isolés mais un même motif
+    # (ex. Delivered non remonté pour un type de BC) -> une alerte par catégorie, pas une par BC.
+    floor = flagged[(flagged["mode"] != "static") & (flagged["rate"] <= 0)]
+    for cat, g in floor.groupby("category", dropna=False):
+        sent, n = int(g["sent"].sum()), len(g)
+        top = g.sort_values("sent", ascending=False)
         yield Anomaly(
-            entity_type="bc_name", entity_key=bc, date=first, category=_first(g, "category"),
-            severity=ctx.scaled(p["severity"], sent), metric="delivered", value=0, expected="> 0", volume=sent,
-            message=(f"« {bc} » : Delivered 0 pour Sent {fmt_int(sent)} sur {len(g)} broadcast(s) "
-                     f"({first} → {last}, Status {g['status'].iloc[-1]})."),
-            details={"broadcast_ids": g["broadcast_id"].tolist(), "dates": sorted(g["date"].unique().tolist()),
-                     "acknowledged": int(g["acknowledged"].sum())},
+            entity_type="category", entity_key=f"{cat} · Delivered = 0", date=g["first"].min(),
+            category=None if pd.isna(cat) else cat, severity=ctx.scaled(p["severity"], sent), metric="delivery_rate",
+            value=0, expected=f"> {fmt_pct(g['p50'].iloc[0])} (médiane des pairs)", volume=sent,
+            message=(f"{cat} : {n} BC avec Delivered 0 pour Sent {fmt_int(sent)} (médiane des pairs "
+                     f"{fmt_pct(g['p50'].iloc[0])}). Principaux : "
+                     + ", ".join(f"« {b} » ({fmt_int(s)})" for b, s in zip(top.index[:3], top["sent"][:3])) + "."),
+            details={"bc_names": top.index.tolist(), "broadcast_ids": [i for ids in g["broadcast_ids"] for i in ids],
+                     **pct.info(g.iloc[0])},
+        )
+    for bc, r in flagged.drop(index=floor.index).iterrows():
+        sent = int(r["sent"])
+        yield Anomaly(
+            entity_type="bc_name", entity_key=bc, date=r["first"], category=r["category"],
+            severity=ctx.scaled(p["severity"], sent - r["delivered"]), metric="delivery_rate",
+            value=round(r["rate"], 4), expected="> 0" if r["mode"] == "static" else f"> {fmt_pct(r['p_low'])}",
+            volume=int(sent - r["delivered"]),
+            message=(f"« {bc} » : Delivery% {fmt_pct(r['rate'])} (Delivered {fmt_int(r['delivered'])} / "
+                     f"Sent {fmt_int(sent)}, {r['first']} → {r['last']}). {_position(r, pct.LOW)}."),
+            details={"broadcast_ids": r["broadcast_ids"], "dates": r["dates"],
+                     "acknowledged": int(r["acknowledged"]), **pct.info(r)},
         )
 
 
-@rule("PM-DLV-02", "Chute du Delivery%", "push", "major", min_sent=10000)
+@rule("PM-DLV-02", "Chute du Delivery%", "push", "major", min_sent=10000, min_abs_gap=0.10)
 def delivery_drop(ctx: RuleContext, p: dict):
-    b = ctx.det.get("baseline", {})
+    pc = pct.settings(ctx.det)
     hist = ctx.business(ctx.hist_push)
     hist = hist[hist["sent"] > 0]
     if hist.empty:
@@ -151,36 +204,46 @@ def delivery_drop(ctx: RuleContext, p: dict):
         g = g.set_index("date").sort_index()
         rate = g["delivered"] / g["sent"]
         rate[g["sent"] < p["min_sent"]] = float("nan")
-        z = robust_zscores(rate, b.get("window_days", 14), b.get("min_points", 5))
-        flagged = z[(z["z"] <= -b.get("z_threshold", 3.5)) & z.index.isin(current_dates)]
-        for day, row in flagged.iterrows():
-            sent = int(g.loc[day, "sent"])
-            missing = int(sent * (row["median"] - row["value"]))
+        res = pct.history_outliers(rate, pct.LOW, pc, min_abs_gap=p["min_abs_gap"])
+        for run in pct.runs(res, current_dates):
+            # un épisode = jours hors norme consécutifs ; un seul jour = minor, 2 jours et + = sévérité de la règle
+            first, last, days = run.index[0], run.index[-1], len(run)
+            missing = int((g.loc[run.index, "sent"] * (run["p50"] - run["value"])).sum())
+            worst = run.loc[run["value"].idxmin()]
+            base = p["severity"] if days > 1 else "minor"
+            when = f"le {first}" if days == 1 else f"du {first} au {last} ({days} jours)"
             yield Anomaly(
-                entity_type="category", entity_key=cat, date=day, category=None if cat.startswith("Toutes") else cat,
-                severity=ctx.scaled(p["severity"], missing), metric="delivery_rate", value=round(row["value"], 4),
-                expected=f"≈ {fmt_pct(row['median'])}", volume=missing,
-                message=(f"{cat} le {day} : Delivery% {fmt_pct(row['value'])} contre {fmt_pct(row['median'])} "
-                         f"habituellement (z = {row['z']:.1f}), soit ~{fmt_int(missing)} Delivered en moins."),
-                details={"sent": sent, "delivered": int(g.loc[day, "delivered"]), "z": round(row["z"], 2)},
+                entity_type="category", entity_key=cat, date=first, category=None if cat.startswith("Toutes") else cat,
+                severity=ctx.scaled(base, missing), metric="delivery_rate", value=round(worst["value"], 4),
+                expected=f"≥ {fmt_pct(worst['p_low'])} (P5 historique)", volume=missing,
+                message=(f"{cat} {when} : Delivery% {fmt_pct(worst['value'])} au plus bas, sous le P5 historique "
+                         f"{fmt_pct(worst['p_low'])} (médiane {fmt_pct(worst['p50'])}), soit ~{fmt_int(missing)} "
+                         f"Delivered en moins."),
+                details={"days": run.index.tolist(), "last_date": last, **pct.info(worst)},
             )
 
 
-@rule("PM-DLV-03", "Acknowledged % faible", "push", "minor", min_sent=1000, max_ack_rate=0.90)
+@rule("PM-DLV-03", "Acknowledged % faible", "push", "minor", min_sent=1000, max_ack_rate=0.90, min_abs_gap=0.05)
 def low_ack(ctx: RuleContext, p: dict):
     df = ctx.business(ctx.push)
     df = df[df["sent"] >= p["min_sent"]]
-    df = df[df["acknowledged"] / df["sent"] < p["max_ack_rate"]]
-    for bc, g, first, last, days in _episodes_by_bc(df):
-        sent, ack = int(g["sent"].sum()), int(g["acknowledged"].sum())
-        rate = ack / sent
+    if df.empty:
+        return
+    t = _bc_table(df)
+    t["rate"] = t["acknowledged"] / t["sent"]
+    res = _detect(ctx, p, t, "rate", pct.LOW, t["rate"] < p["max_ack_rate"], p["min_abs_gap"])
+    for bc, r in res[res["flag"]].iterrows():
+        sent, ack = int(r["sent"]), int(r["acknowledged"])
         yield Anomaly(
-            entity_type="bc_name", entity_key=bc, date=first, category=_first(g, "category"),
-            severity=ctx.scaled(p["severity"], sent - ack), metric="ack_rate", value=round(rate, 4),
-            expected=f"≥ {fmt_pct(p['max_ack_rate'])}", volume=sent - ack,
-            message=(f"« {bc} » : Acknowledged % {fmt_pct(rate)} (Acknowledged {fmt_int(ack)} / Sent {fmt_int(sent)}) "
-                     f"sur {len(g)} broadcast(s), {first} → {last}."),
-            details={"broadcast_ids": g["broadcast_id"].tolist(), "dates": sorted(g["date"].unique().tolist())},
+            entity_type="bc_name", entity_key=bc, date=r["first"], category=r["category"],
+            severity=ctx.scaled(p["severity"], sent - ack), metric="ack_rate", value=round(r["rate"], 4),
+            expected=(f"≥ {fmt_pct(p['max_ack_rate'])}" if r["mode"] == "static"
+                      else f"≥ {fmt_pct(r['p_low'])} (P5 des pairs)"),
+            volume=sent - ack,
+            message=(f"« {bc} » : Acknowledged % {fmt_pct(r['rate'])} (Acknowledged {fmt_int(ack)} / Sent "
+                     f"{fmt_int(sent)}) sur {len(r['broadcast_ids'])} broadcast(s), {r['first']} → {r['last']}. "
+                     f"{_position(r, pct.LOW)}."),
+            details={"broadcast_ids": r["broadcast_ids"], "dates": r["dates"], **pct.info(r)},
         )
 
 
@@ -191,18 +254,28 @@ def _mature(ctx: RuleContext) -> pd.DataFrame:
     return df[(df["age_days"] >= ctx.det.get("maturity_days", 3)) & (df["sent"] > 0)]
 
 
-@rule("PM-PRF-01", "Conv = 0", "push", "minor", min_sent=1000)
+@rule("PM-PRF-01", "Conversion% anormalement basse", "push", "minor", min_sent=1000, min_abs_gap=0.002)
 def no_conversion(ctx: RuleContext, p: dict):
     df = _mature(ctx)
-    for bc, g, first, last, days in _episodes_by_bc(df):
-        sent = int(g["sent"].sum())
-        if g["conversions"].sum() > 0 or sent < p["min_sent"]:
-            continue
+    if df.empty:
+        return
+    t = _bc_table(df)
+    t = t[t["sent"] >= p["min_sent"]].copy()
+    if t.empty:
+        return
+    t["rate"] = t["conversions"] / t["sent"]
+    res = _detect(ctx, p, t, "rate", pct.LOW, t["conversions"] == 0, p["min_abs_gap"])
+    for bc, r in res[res["flag"]].iterrows():
+        sent = int(r["sent"])
+        lost = sent if r["mode"] == "static" else int(max(r["p50"] - r["rate"], 0) * sent)
         yield Anomaly(
-            entity_type="bc_name", entity_key=bc, date=first, category=_first(g, "category"),
-            metric="conversions", value=0, expected="> 0", volume=sent,
-            message=f"« {bc} » : Conv 0 pour Sent {fmt_int(sent)} sur {days} jour(s) ({first} → {last}).",
-            details={"campaign": _first(g, "campaign_name"), "broadcasts": len(g)},
+            entity_type="bc_name", entity_key=bc, date=r["first"], category=r["category"],
+            metric="conversion_rate", value=round(r["rate"], 5),
+            expected="> 0" if r["mode"] == "static" else f"> {fmt_pct(r['p_low'])}", volume=sent,
+            message=(f"« {bc} » : Conv {fmt_int(r['conversions'])} pour Sent {fmt_int(sent)} "
+                     f"(Conv% {fmt_pct(r['rate'])}, {r['first']} → {r['last']}), ~{fmt_int(lost)} Conv "
+                     f"sous la médiane des pairs. {_position(r, pct.LOW)}."),
+            details={"campaign": r["campaign"], "broadcasts": len(r["broadcast_ids"]), **pct.info(r)},
         )
 
 
@@ -228,20 +301,32 @@ def negative_uplift(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-PRF-03", "Fulfillment Failure (Push)", "push", "major", min_failures=10, max_failure_rate=0.20)
+@rule("PM-PRF-03", "Fulfillment Failure% anormalement haut (Push)", "push", "major",
+      min_failures=10, max_failure_rate=0.20, min_abs_gap=0.05)
 def push_fulfillment_failure(ctx: RuleContext, p: dict):
-    df = ctx.push.copy()
-    attempts = df["fulfillment_success"] + df["fulfillment_failure"]
-    df["fail_rate"] = df["fulfillment_failure"] / attempts.where(attempts > 0)
-    df = df[(df["fulfillment_failure"] >= p["min_failures"]) & (df["fail_rate"] >= p["max_failure_rate"])]
-    for r in df.itertuples():
+    if ctx.push.empty:
+        return
+    t = _bc_table(ctx.push)
+    attempts = t["success"] + t["failures"]
+    t["rate"] = t["failures"] / attempts.where(attempts > 0)
+    t = t[attempts >= p["min_failures"]].copy()
+    if t.empty:
+        return
+    static = (t["failures"] >= p["min_failures"]) & (t["rate"] >= p["max_failure_rate"])
+    res = _detect(ctx, p, t, "rate", pct.HIGH, static, p["min_abs_gap"])
+    # le plancher de volume reste absolu : pas d'alerte sur quelques échecs isolés
+    res = res[res["flag"] & (res["failures"] >= p["min_failures"])]
+    for bc, r in res.iterrows():
         yield Anomaly(
-            entity_type="broadcast", entity_key=str(r.broadcast_id), date=r.date, category=r.category,
-            severity=ctx.scaled(p["severity"], r.fulfillment_failure), metric="fulfillment_failure_rate",
-            value=round(r.fail_rate, 4), expected=f"< {fmt_pct(p['max_failure_rate'])}", volume=r.fulfillment_failure,
-            message=(f"« {r.bc_name} » ({r.date}) : Fulfillment Failure {fmt_int(r.fulfillment_failure)} "
-                     f"({fmt_pct(r.fail_rate)})."),
-            details={"bc_name": r.bc_name, "success": r.fulfillment_success},
+            entity_type="bc_name", entity_key=bc, date=r["first"], category=r["category"],
+            severity=ctx.scaled(p["severity"], r["failures"]), metric="fulfillment_failure_rate",
+            value=round(r["rate"], 4),
+            expected=(f"< {fmt_pct(p['max_failure_rate'])}" if r["mode"] == "static"
+                      else f"< {fmt_pct(r['p_high'])} (P95 des pairs)"),
+            volume=int(r["failures"]),
+            message=(f"« {bc} » ({r['first']} → {r['last']}) : Fulfillment Failure {fmt_int(r['failures'])} "
+                     f"({fmt_pct(r['rate'])}). {_position(r, pct.HIGH)}."),
+            details={"success": int(r["success"]), "broadcast_ids": r["broadcast_ids"], **pct.info(r)},
         )
 
 
