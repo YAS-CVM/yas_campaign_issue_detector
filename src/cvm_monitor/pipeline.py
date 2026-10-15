@@ -32,6 +32,7 @@ class RunResult:
     rule_errors: dict[str, str] = field(default_factory=dict)
     report_path: Path | None = None
     notifications: dict[str, str] = field(default_factory=dict)
+    site: str | None = None
 
     def summary(self) -> str:
         if self.skipped:
@@ -55,7 +56,28 @@ def build_context(cfg: Config, conn, snapshot) -> RuleContext:
         prev_push=repo.load_push(conn, prev["id"]) if prev else None,
         prev_im=repo.load_im(conn, prev["id"]) if prev else None,
         prev_snapshot_date=date.fromisoformat(prev["snapshot_date"]) if prev else None,
+        snapshots=_snapshots_upto(conn, snapshot),
+        versions=_prior_versions(conn, snapshot),
+        fill=repo.fill_rates(conn, snapshot["snapshot_date"]),
+        known_values=repo.known_values(conn, snapshot["id"]),
     )
+
+
+def _snapshots_upto(conn, snapshot) -> pd.DataFrame:
+    snaps = repo.list_snapshots(conn)
+    snaps = snaps[snaps["snapshot_date"] <= snapshot["snapshot_date"]]
+    return snaps.sort_values(["snapshot_date", "id"]).reset_index(drop=True)
+
+
+def _prior_versions(conn, snapshot) -> pd.DataFrame:
+    """Versions Push des fichiers antérieurs : référence de maturité indépendante du fichier évalué."""
+    from .analytics.maturity import LATE_METRICS
+    cols = ", ".join(f"p.{c}" for c in ["broadcast_id", "age_days", *LATE_METRICS])
+    try:
+        return pd.read_sql(f"SELECT {cols}, s.snapshot_date FROM push_facts p JOIN snapshots s ON s.id = p.snapshot_id"
+                           " WHERE s.snapshot_date < ?", conn, params=(snapshot["snapshot_date"],))
+    except Exception:  # base vide (premier fichier) : pas de référence
+        return pd.DataFrame()
 
 
 def detect_snapshot(cfg: Config, conn, snapshot) -> tuple[list, set[str], dict[str, str], repo.SyncResult]:
@@ -75,7 +97,18 @@ def export_csv(cfg: Config, conn, snapshot) -> Path:
     return out
 
 
-def process_file(cfg: Config, path: str | Path, notify: bool = True, archive: bool | None = None) -> RunResult:
+def rebuild_site(cfg: Config) -> str:
+    """Régénère le tableau de bord statique ; ne fait jamais échouer le traitement d'un fichier."""
+    try:
+        from .site.build import build_site
+        return build_site(cfg).summary()
+    except Exception as e:  # pragma: no cover - le traitement du fichier reste valide
+        log.exception("Échec de la génération du site")
+        return f"échec de la génération du site : {type(e).__name__}: {e}"
+
+
+def process_file(cfg: Config, path: str | Path, notify: bool = True, archive: bool | None = None,
+                 build: bool = True) -> RunResult:
     path = Path(path)
     result = RunResult(file=path)
     conn = connect(cfg.path("db"))
@@ -102,6 +135,8 @@ def process_file(cfg: Config, path: str | Path, notify: bool = True, archive: bo
             from .notify.dispatcher import dispatch
             result.notifications = dispatch(cfg, conn, snapshot, sync)
         _archive(cfg, path, archive)
+        if build and latest["id"] == snapshot_id:
+            result.site = rebuild_site(cfg)
         return result
     finally:
         conn.close()

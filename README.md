@@ -4,7 +4,7 @@ Surveillance automatique des campagnes CVM Yas Sénégal à partir du fichier qu
 `Yas_Senegal_Daily_Dashboard_till_<JJ>_<Mois>_<AAAA>.xlsb`.
 
 Chaque nouveau fichier est **historisé** (SQLite), **analysé** (environ 25 règles de détection), et donne lieu à des **alertes**
-(Teams, e-mail) et à un **tableau de bord** Streamlit. Le vocabulaire métier et le catalogue des règles sont décrits
+(Teams, e-mail) et à un **tableau de bord statique** (HTML généré, aucun chargement à l'affichage). Le vocabulaire métier et le catalogue des règles sont décrits
 dans [ROADMAP.md](ROADMAP.md).
 
 ```
@@ -19,34 +19,20 @@ dans [ROADMAP.md](ROADMAP.md).
 
 Prérequis : **Python 3.10 ou plus récent**. Aucun droit administrateur n'est nécessaire.
 
-### Linux
-
 ```bash
 cd yas_campaign_issue_detector
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dashboard]"
+.venv/bin/pip install -e ".[api]"
 cp config/.env.example config/.env      # puis renseigner Teams / SMTP (facultatif)
 ```
 
-### Windows (PowerShell)
-
-```powershell
-cd yas_campaign_issue_detector
-py -m venv .venv
-.venv\Scripts\pip install -e ".[dashboard]"
-copy config\.env.example config\.env    # puis renseigner Teams / SMTP (facultatif)
-```
-
-Sous Windows, si le port SMTP est bloqué, envoyez les e-mails via Outlook : installez `pip install -e ".[outlook]"`
-puis mettez `backend: outlook` dans la section `notify.email` de `config/config.yaml`.
-
-Dans la suite, `cvm-monitor` désigne `.venv/bin/cvm-monitor` (Linux) ou `.venv\Scripts\cvm-monitor` (Windows).
+Dans la suite, `cvm-monitor` désigne `.venv/bin/cvm-monitor`.
 
 ---
 
 ## Utilisation au quotidien
 
-**Depuis le tableau de bord** : page **Importer**, glisser le ou les fichiers `.xlsb`, puis cliquer sur « Importer ».
+**Depuis le tableau de bord** : icône ⚙ (Paramètres), choisir le fichier `.xlsb` ; il est traité puis le tableau de bord est régénéré.
 Le traitement est le même que `cvm-monitor run` : historisation, détection, alertes (désactivables) et archivage.
 Un fichier déjà importé est reconnu et ignoré.
 
@@ -86,7 +72,9 @@ comparaison à l'historique (médiane glissante) et la courbe de maturité des c
 | `cvm-monitor report --period week\|month` | Rapport Excel : KPI, scorecards campagnes, règles IM, anomalies |
 | `cvm-monitor preview` | Écrit l'e-mail récapitulatif en HTML, sans l'envoyer |
 | `cvm-monitor notify-test` | Envoie un message de test sur Teams et par e-mail |
-| `cvm-monitor dashboard [--port 8000]` | Lance le tableau de bord |
+| `cvm-monitor feed-check [--no-notify]` | Alerte si le fichier du jour n'est pas arrivé à l'heure limite (`feed.deadline`) |
+| `cvm-monitor dashboard [--port 8000]` | Sert le tableau de bord (alias de `serve`) |
+| `cvm-monitor build-site` | Régénère le tableau de bord statique (`site/`) depuis la base |
 
 ---
 
@@ -94,14 +82,11 @@ comparaison à l'historique (médiane glissante) et la courbe de maturité des c
 
 Le fichier est déposé à la main ; l'outil peut ensuite tourner seul.
 
-- **Linux (cron)** : `scripts/install_cron.sh` lance `run` toutes les heures de 9 h à 18 h, du lundi au samedi.
+- **cron** : `scripts/install_cron.sh` lance `run` toutes les heures de 9 h à 18 h, du lundi au samedi.
   Désinstaller : `scripts/install_cron.sh --remove`.
-- **Windows (Planificateur de tâches)** :
-  `powershell -ExecutionPolicy Bypass -File scripts\install_task.ps1`
-  (même rythme ; `-Remove` pour désinstaller).
 - **Alternative** : laisser `cvm-monitor watch` ouvert dans un terminal. Le fichier est traité dès qu'il est déposé.
 
-Comme `run` ne traite que les nouveaux fichiers, le lancer plusieurs fois par jour ne crée aucun doublon.
+Comme `run` ne traite que les nouveaux fichiers, le lancer plusieurs fois par jour ne crée aucun doublon. Quand l'inbox est vide après l'heure limite (`feed.deadline`), il signale une fois le fichier du jour non reçu.
 
 ---
 
@@ -134,6 +119,10 @@ Les anciens connecteurs « Incoming Webhook » d'Office 365 sont retirés par Mi
 Renseigner `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` et `MAIL_TO` dans `config/.env`.
 `MAIL_TO` accepte plusieurs adresses séparées par des virgules.
 
+**Outlook / Office 365** : mettre `backend: outlook` dans la section `notify.email` de `config/config.yaml`,
+puis renseigner `SMTP_USER`, `SMTP_PASSWORD` (compte Microsoft 365) et `MAIL_TO`. `SMTP_HOST` / `SMTP_PORT`
+valent par défaut `smtp.office365.com:587`.
+
 ---
 
 ## Règles de détection
@@ -143,12 +132,13 @@ dans `config/config.yaml`, sans toucher au code.
 
 | Famille | Règles | Exemples |
 |---|---|---|
-| Push : exécution | `PM-EXE-01` à `05` | Broadcast bloqué en Delivering, Aborted, en pause, blackout, ciblé mais non envoyé |
+| Push : exécution | `PM-EXE-01` à `07` | Broadcast bloqué en Delivering, Aborted, en pause, blackout, ciblé mais non envoyé |
 | Push : livraison | `PM-DLV-01` à `03` | 0 livré, chute du taux de livraison vs l'historique, acquittement SMSC faible |
 | Push : performance | `PM-PRF-01` à `03` | 0 conversion, uplift négatif **significatif**, échecs de provisionnement |
 | Push : qualité | `PM-DQ-01` à `06` | Envoyés > ciblés, conversions > envoyés, pas de groupe de contrôle, colonne vide, jour manquant |
 | Inbound | `IM-FUL-*`, `IM-IMP-*`, `IM-DQ-*` | Règle IM en échec, hausse du taux d'échec, offre affichée sans activation, données non rafraîchies |
-| Snapshots | `SNP-01` à `03` | Volumes révisés, broadcast disparu, données IM passées modifiées |
+| Snapshots | `SNP-01` à `03` | Volumes révisés, broadcasts disparus (tant qu'ils manquent), données IM passées modifiées |
+| Flux NEON-dx | `FEED-01` à `06` | Fichier manquant, changement de format, métrique non alimentée, fin de mois tronquée, attribution en retard |
 
 Principes :
 - **Maturité** : les conversions Push ne sont jugées qu'après `maturity_days` jours, car elles continuent d'arriver après l'envoi.
@@ -176,17 +166,32 @@ Ajoutez ensuite `PM-XXX-01: {enabled: true, severity: major, min_sent: 1000}` da
 
 ## Tableau de bord
 
-| Page | Contenu |
-|---|---|
-| Vue d'ensemble | KPI du jour vs moyenne sur 7 jours, anomalies ouvertes, tendances Push et IM |
-| Importer | Dépôt de fichiers `.xlsb` depuis le navigateur, résultat de la détection |
-| Anomalies | Filtres, détail, **acquitter / mettre en sourdine / rouvrir** avec note, export CSV |
-| Push | Entonnoir, statuts, carte de chaleur du taux de livraison par catégorie × jour, performance par catégorie |
-| Inbound | Impressions, taux d'échec, règles avec le plus d'échecs |
-| Campagnes | Uplift vs groupe de contrôle avec intervalle de confiance et p-value, verdict, fiche détaillée |
-| Maturité | Courbe d'arrivée des conversions, estimation des conversions à maturité |
-| Snapshots | Fichiers ingérés, écarts entre deux versions |
-| Qualité des données | Contrôles de cohérence du dernier fichier |
+Une seule page HTML, **générée après chaque import et chaque acquittement** (`site/index.html`), qui embarque toutes
+les données (environ 300 Ko compressés). Filtres, onglets et tiroirs de détail sont calculés dans le navigateur :
+aucune requête réseau à l'affichage. Le serveur (`cvm-monitor serve`) ne sert qu'à l'écriture.
+
+| Onglet | Question | Contenu |
+|---|---|---|
+| **Push Campaigns** | Nos envois partent-ils, arrivent-ils, convertissent-ils ? | Jour J vs 7 j et même jour de semaine, exécution au dernier fichier et transitions de statut, entonnoir, séries, carte de chaleur catégorie × jour, explorateur Campagne → BC → Broadcast, historique des versions d'un broadcast |
+| **Inbound Marketing** | Les offres présentées sont-elles achetées ? Les données IM sont-elles à jour ? | Jour J, touchpoints, programmes, règles IM (en échec, sans achat, non rafraîchies, nouvelles / disparues), offres |
+| **Analytics** | Qu'est-ce que ça rapporte, où agir, peut-on se fier aux chiffres ? | Uplift TG vs CG (forest plot), potentiel d'amélioration, distributions et seuils P5 / P50 / P95, tendances, maturité par métrique, arrivée des données NEON-dx |
+| **Alertes** | Que traiter et prévenir aujourd'hui ? | Santé du flux NEON-dx, file de traitement (acquitter / sourdine / rouvrir), tendance, catalogue des règles, journal des notifications |
+| ⚙ Paramètres | | Import d'un fichier, canaux Teams / e-mail et test, fichiers reçus |
+
+**Filtres de la page et filtres de carte.**
+- **Filtres de la page** : période, catégorie, campagne, statut, seeding… Ils sont réglés dans la barre du haut et
+  s'appliquent à toutes les cartes de l'onglet. Ils restent visibles en puces amovibles, et le bouton Retour du
+  navigateur annule le dernier.
+- **Filtres de carte** : métrique, niveau, Jour J, préfiltre, ou clic sur une donnée (case de heatmap, barre, ligne
+  de catégorie ou de programme). Ils ne concernent que la carte concernée et s'affichent en badge jaune « ↳ … × ».
+- Aucun filtre ne fait remonter la page. Chaque onglet garde sa position, le sommaire « Aller à » mène à chaque
+  section, et les sections se replient d'un clic sur leur titre (état mémorisé).
+
+**Complétude des chiffres.** Une valeur vide n'est pas 0, et 0 aujourd'hui n'est pas définitif : les conversions,
+la valeur, le fulfillment et les conversions du groupe de contrôle arrivent sur plusieurs jours. Chaque chiffre
+porte son état : définitif, *en maturation* (italique pointillé, avec l'estimation à maturité), `n/r` (non renseigné
+par NEON-dx), **tronqué** (envoi de fin de mois sorti des fichiers avant maturité) ou **disparu** (broadcast sorti
+des fichiers en cours de mois).
 
 ---
 
@@ -197,14 +202,15 @@ config/            config.yaml (seuils, canaux) · .env (secrets, non versionné
 inbox/  archive/   dépôt des fichiers · fichiers traités
 data/monitor.db    historique SQLite (snapshots, faits Push/IM, anomalies, notifications)
 reports/           CSV, rapports Excel, aperçus d'e-mail
-scripts/           installation cron / Planificateur de tâches
+scripts/           installation cron
 src/cvm_monitor/
   ingest/          lecture et validation du .xlsb
   storage/         SQLite, cycle de vie des anomalies
   detect/          moteur, règles Push / IM / snapshots, historique (médiane + MAD)
   analytics/       KPI, uplift et significativité, maturité des conversions
   notify/          Teams, e-mail, choix de ce qui est envoyé
-  dashboard/       application Streamlit
+  site/            génération du tableau de bord statique (build.py, templates, static/*.js|css)
+  api/             serveur : sert site/ + actions (acquitter, importer, tester les canaux)
 tests/             pytest (règles, cycle de vie, alertes, bout en bout sur les vrais fichiers)
 ```
 
@@ -224,5 +230,5 @@ Les tests de bout en bout utilisent les fichiers `.xlsb` présents à la racine 
 | `Feuille 'Data_Push' : colonnes obligatoires absentes` | Le format du Daily Dashboard a changé : adapter `ingest/schema.py` |
 | `déjà ingéré` | Normal : le même fichier a déjà été traité. Pour retraiter, supprimer `data/monitor.db` puis relancer `backfill` |
 | Teams : `ERREUR 4xx` | URL du webhook invalide ou flux Workflows désactivé |
-| E-mail bloqué au bureau | Passer au backend `outlook` (Windows) |
+| Outlook : `535` / authentification refusée | Activer SMTP AUTH pour la boîte dans l'admin Microsoft 365 |
 | Trop d'alertes | Relever les seuils ou désactiver une règle dans `config.yaml` ; ajouter des motifs à `technical_bc_patterns` |

@@ -33,15 +33,30 @@ def frozen_metrics_changed(ctx: RuleContext, p: dict):
         )
 
 
-@rule("SNP-02", "Broadcast disparu", "snapshot", "major", needs_previous=True)
+@rule("SNP-02", "Broadcast disparu", "snapshot", "major")
 def broadcast_disappeared(ctx: RuleContext, p: dict):
-    start = ctx.push["date"].min()
-    prev = ctx.prev_push[ctx.prev_push["date"] >= start]
-    for r in prev[~prev["broadcast_id"].isin(ctx.push["broadcast_id"])].itertuples():
+    """Broadcasts du mois couvert par le fichier, vus dans un fichier antérieur, absents du fichier courant.
+
+    Comparé à tout l'historique (et non au seul fichier précédent) : l'alerte reste ouverte tant que les
+    broadcasts manquent et se résout s'ils reviennent. Le changement de mois n'est pas une disparition
+    (le fichier ne couvre que le mois en cours). Un épisode par fichier de dernière apparition.
+    """
+    start, end = ctx.push["date"].min(), ctx.push["date"].max()
+    h = ctx.hist_push
+    gone = h[(h["date"] >= start) & (h["date"] <= end) & ~h["broadcast_id"].isin(ctx.push["broadcast_id"])]
+    for last_seen, g in gone.groupby("snapshot_date"):
+        sent = int(g["sent"].sum())
+        first, last = g["date"].min(), g["date"].max()
         yield Anomaly(
-            entity_type="broadcast", entity_key=str(r.broadcast_id), date=r.date, category=r.category,
-            metric="present", value=0, expected="présent", volume=r.sent,
-            message=f"« {r.bc_name} » ({r.date}, Sent {fmt_int(r.sent)}) présent dans le fichier du {ctx.prev_snapshot_date}, absent du fichier courant.",
+            entity_type="dataset", entity_key=f"broadcasts absents après le fichier du {last_seen}", date=first,
+            category=g["category"].mode().iloc[0] if g["category"].notna().any() else None,
+            severity=ctx.scaled(p["severity"], sent), metric="missing_broadcasts", value=len(g), expected="présents",
+            volume=sent,
+            message=(f"{len(g)} broadcast(s) envoyés du {first} au {last} (Sent {fmt_int(sent)}), présents dans le "
+                     f"fichier du {last_seen}, absents du fichier du {ctx.snapshot_date}. Leurs dernières valeurs "
+                     "connues sont conservées. À signaler à Flytxt."),
+            details={"broadcast_ids": g["broadcast_id"].astype(int).tolist(), "last_seen": last_seen,
+                     "bc_names": sorted(g["bc_name"].dropna().unique().tolist())[:30]},
         )
 
 

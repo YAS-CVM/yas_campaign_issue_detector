@@ -35,6 +35,10 @@ def build_card(title: str, subtitle: str, items: pd.DataFrame, counts: dict[str,
                  "color": SEVERITY_COLOR.get(r.severity, "Default"),
                  "text": f"{SEVERITY_LABEL.get(r.severity, '').upper()} · {r.rule_id} · {r.rule_name}"},
                 {"type": "TextBlock", "wrap": True, "spacing": "Small", "text": r.message},
+                *([{"type": "TextBlock", "wrap": True, "spacing": "None", "color": "Attention",
+                    "text": f"Impact : {r.impact}"}] if getattr(r, "impact", "") else []),
+                *([{"type": "TextBlock", "wrap": True, "spacing": "None", "isSubtle": True,
+                    "text": f"Action : {r.action}"}] if getattr(r, "action", "") else []),
             ],
         })
     if len(items) > max_items:

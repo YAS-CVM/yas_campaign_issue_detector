@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paramètres · Yas CVM Monitor</title>
+<link rel="stylesheet" href="{{ assets['font.css'] }}">
+<link rel="stylesheet" href="{{ css }}">
+</head>
+<body>
+<header class="app-header">
+  <div class="bar">
+    <a class="brand" href="index.html#push">{{ logo|safe }}<span>CVM Monitor</span></a>
+    <nav class="tabs" aria-label="Sections">
+      <a href="index.html#push">Push Campaigns</a><a href="index.html#inbound">Inbound Marketing</a>
+      <a href="index.html#analytics">Analytics</a><a href="index.html#alertes">Alertes</a>
+    </nav>
+    <div class="hdr-right">
+      <a class="gear" href="settings.html" aria-label="Paramètres" style="background:rgba(255,255,255,.12);color:#fff"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a>
+    </div>
+  </div>
+</header>
+<div class="pagehead">
+  <div class="ph-title"><div class="ph-eyebrow">Administration</div><h1>Paramètres</h1><p class="ph-sub">Import des fichiers, canaux d'alerte et historique des fichiers reçus</p></div>
+</div>
+<main>
+  <div class="tab">
+    <div class="split">
+      <section class="section panel" id="import" style="flex:1 1 520px">
+        <div class="head"><h2>Importer un Daily Dashboard</h2></div>
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <label class="drop" id="drop" for="file">
+            <span class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4"/></svg></span>
+            <b>Déposer le fichier .xlsb ici</b>
+            <span class="small muted">ou cliquer pour parcourir · Yas_Senegal_Daily_Dashboard_till_JJ_MoisAAAA.xlsb</span>
+            <input type="file" accept=".xlsb" id="file">
+          </label>
+          <label class="check"><input type="checkbox" id="notify"> Envoyer les alertes (Teams / e-mail) après l'import</label>
+          <div id="import-status" role="status" aria-live="polite"></div>
+          {% if meta.latest %}{% set d = meta.latest.snapshot_date %}<div class="note">Dernier fichier reçu : <strong>till {{ d[8:10] }}/{{ d[5:7] }}/{{ d[:4] }}</strong>, importé le {{ (meta.latest.ingested_at or '')[8:10] }}/{{ (meta.latest.ingested_at or '')[5:7] }} à {{ (meta.latest.ingested_at or '')[11:16] }}. Le fichier « till J » est attendu le lendemain.</div>{% endif %}
+        </div>
+      </section>
+      <section class="section panel" style="flex:1 1 520px">
+        <div class="head"><h2>Génération du tableau de bord</h2></div>
+        {% set g = meta.generated_at or '' %}
+        <dl class="kv">
+          <dt>Généré le</dt><dd>{{ g[8:10] }}/{{ g[5:7] }}/{{ g[:4] }} · {{ g[11:19] }}</dd>
+          <dt>Dernier fichier</dt><dd>{% if meta.latest %}{{ meta.latest.file_name }}{% else %}aucun{% endif %}</dd>
+          <dt>Maturité</dt><dd>Conversions jugées à partir de J+{{ meta.maturity_days }}, valeur finale à J+{{ meta.maturity_reference_age }}</dd>
+          <dt>BC techniques</dt><dd>{% for x in meta.technical_bc_patterns or [] %}<span class="badge grey">{{ x }}</span> {% else %}–{% endfor %}</dd>
+          <dt>Catégories de test</dt><dd>{% for x in meta.test_categories or [] %}<span class="badge grey">{{ x }}</span> {% else %}–{% endfor %}</dd>
+          <dt>Sans objectif de conversion</dt><dd>{% for x in meta.non_conversion_categories or [] %}<span class="badge grey">{{ x }}</span> {% else %}–{% endfor %}</dd>
+        </dl>
+      </section>
+    </div>
+    <section class="section" id="canaux"><div class="head"><h2>Canaux d'alerte</h2></div><div class="split" id="channels"><div class="card" style="flex:1"><span class="muted">Lecture de la configuration…</span></div></div></section>
+    <section class="section panel"><div class="head"><h2>Fichiers reçus</h2><span class="sec-sub">{{ snapshots|length }} fichier(s)</span></div>
+      {% set maxp = (snapshots|map(attribute='push_rows')|max) if snapshots else 1 %}{% set maxi = (snapshots|map(attribute='im_rows')|max) if snapshots else 1 %}
+      <div class="tbl-wrap"><table class="t"><thead><tr><th>Till</th><th>Nom</th><th>Importé le</th><th>Couverture</th><th class="num" style="min-width:170px">Lignes Push</th><th class="num" style="min-width:170px">Lignes IM</th></tr></thead><tbody>
+      {% for s in snapshots|reverse %}<tr><td><b>{{ s.snapshot_date[8:10] }}/{{ s.snapshot_date[5:7] }}</b></td><td class="small muted"><span class="ell" title="{{ s.file_name }}">{{ s.file_name }}</span></td><td class="small">{{ (s.ingested_at or '')[8:10] }}/{{ (s.ingested_at or '')[5:7] }} {{ (s.ingested_at or '')[11:16] }}</td>
+        <td class="small">{{ (s.date_min or '')[8:10] }}/{{ (s.date_min or '')[5:7] }} → {{ (s.date_max or '')[8:10] }}/{{ (s.date_max or '')[5:7] }}</td>
+        <td><div class="cb"><i><b style="width:{{ '%.1f'|format(100 * s.push_rows / (maxp or 1)) }}%"></b></i><span>{{ '{:,}'.format(s.push_rows).replace(',', ' ') }}</span></div></td>
+        <td><div class="cb"><i><b style="width:{{ '%.1f'|format(100 * s.im_rows / (maxi or 1)) }}%"></b></i><span>{{ '{:,}'.format(s.im_rows).replace(',', ' ') }}</span></div></td></tr>{% endfor %}
+      </tbody></table></div></section>
+  </div>
+</main>
+{% for s in scripts %}<script src="{{ s }}"></script>{% endfor %}
+</body>
+</html>

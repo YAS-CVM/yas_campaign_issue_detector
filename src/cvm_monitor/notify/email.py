@@ -1,4 +1,4 @@
-"""Envoi d'e-mails HTML : SMTP (Linux / Windows) ou Outlook local (Windows)."""
+"""Envoi d'e-mails HTML par SMTP (serveur au choix, ou Outlook / Office 365)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,30 @@ from pathlib import Path
 from ..config import Config
 
 
+OUTLOOK_HOST, OUTLOOK_PORT = "smtp.office365.com", 587
+
+
 class EmailError(RuntimeError):
     pass
+
+
+def backend(cfg: Config) -> str:
+    return cfg.notify.get("email", {}).get("backend", "smtp")
+
+
+def smtp_server(cfg: Config) -> tuple[str | None, int]:
+    """Hôte et port SMTP : ceux de config/.env, sinon ceux d'Office 365 pour le backend outlook."""
+    outlook = backend(cfg) == "outlook"
+    host = cfg.env("SMTP_HOST") or (OUTLOOK_HOST if outlook else None)
+    return host, int(cfg.env("SMTP_PORT") or (OUTLOOK_PORT if outlook else 587))
+
+
+def missing_settings(cfg: Config) -> list[str]:
+    """Variables de config/.env manquantes pour envoyer ; Office 365 exige toujours une authentification."""
+    required = [("MAIL_TO", bool(recipients(cfg))), ("SMTP_HOST", bool(smtp_server(cfg)[0]))]
+    if backend(cfg) == "outlook":
+        required += [("SMTP_USER", bool(cfg.env("SMTP_USER"))), ("SMTP_PASSWORD", bool(cfg.env("SMTP_PASSWORD")))]
+    return [k for k, ok in required if not ok]
 
 
 def recipients(cfg: Config) -> list[str]:
@@ -19,26 +41,18 @@ def recipients(cfg: Config) -> list[str]:
 
 
 def is_configured(cfg: Config) -> bool:
-    if not recipients(cfg):
-        return False
-    if cfg.notify.get("email", {}).get("backend", "smtp") == "outlook":
-        return True
-    return bool(cfg.env("SMTP_HOST"))
+    return not missing_settings(cfg)
 
 
 def send_email(cfg: Config, subject: str, html: str, text: str, attachments: list[Path] | None = None) -> None:
     to = recipients(cfg)
     if not to:
         raise EmailError("MAIL_TO est vide dans config/.env")
-    backend = cfg.notify.get("email", {}).get("backend", "smtp")
-    if backend == "outlook":
-        _send_outlook(to, subject, html, attachments or [])
-    else:
-        _send_smtp(cfg, to, subject, html, text, attachments or [])
+    _send_smtp(cfg, to, subject, html, text, attachments or [])
 
 
 def _send_smtp(cfg: Config, to: list[str], subject: str, html: str, text: str, attachments: list[Path]) -> None:
-    host, port = cfg.env("SMTP_HOST"), int(cfg.env("SMTP_PORT", "587"))
+    host, port = smtp_server(cfg)
     user, password = cfg.env("SMTP_USER"), cfg.env("SMTP_PASSWORD")
     sender = cfg.env("MAIL_FROM") or user
     if not host or not sender:
@@ -64,16 +78,3 @@ def _send_smtp(cfg: Config, to: list[str], subject: str, html: str, text: str, a
     except (smtplib.SMTPException, OSError) as e:
         raise EmailError(f"Échec SMTP ({host}:{port}) : {e}") from e
 
-
-def _send_outlook(to: list[str], subject: str, html: str, attachments: list[Path]) -> None:
-    try:
-        import win32com.client  # type: ignore[import-not-found]
-    except ImportError as e:
-        raise EmailError("Backend outlook : installer pywin32 (pip install pywin32), Windows uniquement") from e
-    mail = win32com.client.Dispatch("Outlook.Application").CreateItem(0)
-    mail.To = "; ".join(to)
-    mail.Subject = subject
-    mail.HTMLBody = html
-    for path in attachments:
-        mail.Attachments.Add(str(path.resolve()))
-    mail.Send()

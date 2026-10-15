@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -33,6 +34,21 @@ def _at_least(df: pd.DataFrame, severity: str) -> pd.DataFrame:
     return df[df["severity"].map(severity_rank) >= severity_rank(severity)]
 
 
+def enrich(df: pd.DataFrame) -> pd.DataFrame:
+    """Ajoute `impact` (chiffrage business) et `action` (suggestion) lus dans `details`."""
+    if df.empty or "details" not in df:
+        return df
+    def pick(raw, key):
+        try:
+            return (json.loads(raw) if isinstance(raw, str) else raw or {}).get(key) or ""
+        except (ValueError, TypeError, AttributeError):
+            return ""
+    out = df.copy()
+    out["impact"] = [pick(d, "impact") for d in out["details"]]
+    out["action"] = [pick(d, "action") for d in out["details"]]
+    return out
+
+
 def _counts(df: pd.DataFrame) -> dict[str, int]:
     return df["severity"].value_counts().to_dict() if not df.empty else {}
 
@@ -47,7 +63,8 @@ def _fmt_pct(v) -> str:
 
 def _kpi_tiles(kpis: dict) -> list[dict]:
     spec = [("Sent", "sent", _fmt_int, True), ("Delivery%", "delivery_rate", _fmt_pct, True),
-            ("Conv", "conversions", _fmt_int, True), ("Impression", "impressions", _fmt_int, True),
+            ("Conv", "conversions", _fmt_int, True), ("Valeur conv.", "conversion_value", _fmt_int, True),
+            ("Impression", "impressions", _fmt_int, True),
             ("Fulfillment Failures%", "im_failure_rate", _fmt_pct, False)]
     tiles = []
     for label, key, fmt, up_is_good in spec:
@@ -69,7 +86,8 @@ def _kpi_tiles(kpis: dict) -> list[dict]:
 
 def render_digest(cfg: Config, snapshot, sync: repo.SyncResult, new: pd.DataFrame, open_: pd.DataFrame,
                   resolved: pd.DataFrame, kpis: dict) -> tuple[str, str, str]:
-    min_sev = cfg.notify.get("email", {}).get("min_severity", "minor")
+    min_sev = cfg.notify.get("email", {}).get("min_severity", "major")
+    new, open_, resolved = enrich(new), enrich(open_), enrich(resolved)
     counts = _counts(open_)
     title = f"Surveillance des campagnes du {snapshot['snapshot_date']}"
     subject = (f"{cfg.notify.get('email', {}).get('subject_prefix', '[Yas CVM Monitor]')} {snapshot['snapshot_date']} : "
@@ -78,10 +96,10 @@ def render_digest(cfg: Config, snapshot, sync: repo.SyncResult, new: pd.DataFram
     html = env.get_template("digest.html.j2").render(
         title=title, file_name=snapshot["file_name"], date_min=snapshot["date_min"], date_max=snapshot["date_max"],
         kpis=_kpi_tiles(kpis) if kpis else [], kpi_date=kpis.get("date") if kpis else None,
-        severities=[{"label": LABELS[s], "count": counts.get(s, 0), **COLORS[s]} for s in ("critical", "major", "minor")],
+        severities=[{"label": LABELS[s], "count": counts.get(s, 0), **COLORS[s]} for s in ("critical", "major")],
         sync_summary=f"Depuis le fichier précédent : {sync.summary()}.",
         sections=[
-            {"title": "Nouvelles anomalies", "rows": list(_at_least(new, min_sev).itertuples()), "limit": 25},
+            {"title": "Nouvelles alertes business", "rows": list(_at_least(new, min_sev).itertuples()), "limit": 25},
             {"title": "Toujours ouvertes (critiques et majeures)",
              "rows": list(_at_least(open_[~open_["id"].isin(new["id"])], "major").itertuples()), "limit": 15},
             {"title": "Résolues", "rows": list(resolved.itertuples()), "limit": 10},
@@ -89,7 +107,8 @@ def render_digest(cfg: Config, snapshot, sync: repo.SyncResult, new: pd.DataFram
         labels=LABELS, colors=COLORS, dashboard_url=cfg.notify.get("dashboard_url"),
     )
     text = f"{title}\n{sync.summary()}\n\n" + "\n".join(
-        f"[{LABELS[r.severity]}] {r.rule_id} - {r.message}" for r in _at_least(new, min_sev).itertuples())
+        f"[{LABELS[r.severity]}] {r.message}" + (f" Impact : {r.impact}." if r.impact else "")
+        + (f" Action : {r.action}" if r.action else "") for r in _at_least(new, min_sev).itertuples())
     return subject, html, text
 
 
@@ -113,7 +132,7 @@ def dispatch(cfg: Config, conn, snapshot, sync: repo.SyncResult) -> dict[str, st
         min_sev = tcfg.get("min_severity", "major")
         reminder_ids = set(repo.reminder_candidates(conn, ncfg.get("realert_after_days", 3), min_sev, today))
         reminder_ids -= set(new["id"]) if not new.empty else set()
-        items = pd.concat([_at_least(new, min_sev), repo.anomalies_df(conn, ids=sorted(reminder_ids))])
+        items = enrich(pd.concat([_at_least(new, min_sev), repo.anomalies_df(conn, ids=sorted(reminder_ids))]))
         if items.empty:
             results["teams"] = "rien à signaler"
         else:
@@ -139,7 +158,7 @@ def dispatch(cfg: Config, conn, snapshot, sync: repo.SyncResult) -> dict[str, st
         results["email"] = "désactivé"
     elif not mail.is_configured(cfg):
         results["email"] = "non configuré (MAIL_TO / SMTP_HOST)"
-    elif new.empty and not ecfg.get("send_when_nothing_new", True):
+    elif _at_least(new, ecfg.get("min_severity", "major")).empty and not ecfg.get("send_when_nothing_new", False):
         results["email"] = "rien de nouveau"
     else:
         kpis = headline(repo.load_push(conn, snapshot["id"]), repo.load_im(conn, snapshot["id"]))
@@ -149,7 +168,7 @@ def dispatch(cfg: Config, conn, snapshot, sync: repo.SyncResult) -> dict[str, st
         try:
             mail.send_email(cfg, subject, html, text, attachments)
             if not new.empty:
-                repo.mark_notified(conn, _at_least(new, ecfg.get("min_severity", "minor"))["id"].astype(int).tolist())
+                repo.mark_notified(conn, _at_least(new, ecfg.get("min_severity", "major"))["id"].astype(int).tolist())
             repo.log_notification(conn, snapshot["id"], "email", len(new), True)
             results["email"] = f"envoyé à {', '.join(mail.recipients(cfg))}"
         except Exception as e:

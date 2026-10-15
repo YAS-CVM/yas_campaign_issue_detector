@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from conftest import make_im, make_push
 from cvm_monitor.api import deps
-from cvm_monitor.api.main import app
+from cvm_monitor.api import main as api
 from cvm_monitor.ingest.loader import Snapshot
 from cvm_monitor.storage import repository as repo
 from cvm_monitor.storage.db import connect
@@ -28,34 +28,42 @@ def client(cfg, monkeypatch):
     repo.insert_snapshot(conn, Snapshot(Path("x.xlsb"), "h1", date(2026, 9, 22), make_push(rows), im))
     conn.close()
     monkeypatch.setattr(deps, "_cfg", cfg)
-    deps._cache.clear()
-    return TestClient(app)
+    # Régénération synchrone : les tests vérifient le site juste après l'écriture.
+    monkeypatch.setattr(api, "rebuild_site_async", lambda c: api.pipeline.rebuild_site(c))
+    return TestClient(api.app)
 
 
-def test_health_and_snapshots(client):
+def test_health(client):
     assert client.get("/health").json()["status"] == "ok"
-    assert len(client.get("/api/v1/snapshots").json()) == 1
 
 
-def test_filter_options_and_overview(client):
-    opts = client.get("/api/v1/filters/options", params={"category": "CVM"}).json()
-    assert "BC_LOW" in opts["bcs"]
-    ov = client.get("/api/v1/overview", params={"bc": "BC_LOW"}).json()
-    assert ov["headline"]["sent"]["value"] == 10_000  # un seul broadcast après filtre
+def test_site_is_generated_on_first_request_and_served_without_api_reads(client, cfg):
+    r = client.get("/")
+    assert r.status_code == 200 and 'id="payload"' in r.text
+    assert r.headers["cache-control"] == "no-cache"
+    assert (cfg.root / "site" / "index.html").exists()
+    asset = next((cfg.root / "site" / "assets").glob("core.*.js")).name
+    a = client.get(f"/assets/{asset}")
+    assert a.status_code == 200 and "immutable" in a.headers["cache-control"]
+    assert client.get("/settings.html").status_code == 200
 
 
-def test_value_campaigns_granular(client):
-    r = client.get("/api/v1/value/campaigns", params={"level": "bc", "only_underperforming": True})
-    # 10 pairs < min_peers (20) : repli statique, donc la liste peut être vide mais l'appel doit réussir
-    assert r.status_code == 200
-    assert client.get("/api/v1/value/summary").json()["campaigns_total"] == 10
+def test_read_endpoints_are_gone(client):
+    for path in ("/api/v1/overview", "/api/v1/snapshots", "/api/v1/anomalies"):
+        assert client.get(path).status_code in (404, 405)
 
 
-def test_anomaly_status_update_and_rules(client):
-    assert client.get("/api/v1/anomalies").json() == []
-    assert client.patch("/api/v1/anomalies", json={"ids": [], "status": "ack"}).status_code == 200
+def test_anomaly_status_update_rebuilds_site(client, cfg):
+    conn = connect(cfg.path("db"))
+    conn.execute("INSERT INTO anomalies(fingerprint, rule_id, severity, status, date) VALUES ('f1','PM-EXE-02','major','open','2026-09-20')")
+    conn.commit()
+    conn.close()
+    assert client.patch("/api/v1/anomalies", json={"ids": [], "status": "ack"}).status_code == 400
     assert client.patch("/api/v1/anomalies", json={"ids": [1], "status": "bogus"}).status_code == 422
-    assert any(r["id"] == "PM-PRF-01" for r in client.get("/api/v1/rules").json())
+    r = client.patch("/api/v1/anomalies", json={"ids": [1], "status": "ack", "by": "qa", "note": "vu"})
+    assert r.json()["updated"] == 1 and r.json()["at"]
+    html = (cfg.root / "site" / "index.html").read_text(encoding="utf-8")
+    assert '"status":"ack"' in html and '"ack_by":"qa"' in html
 
 
 def test_import_rejects_bad_extension(client):
@@ -63,37 +71,11 @@ def test_import_rejects_bad_extension(client):
     assert r.status_code == 400
 
 
-def test_unknown_api_path_is_404_not_spa(client):
-    assert client.get("/api/v1/nope").status_code == 404
-
-
-def test_overview_totals_and_previous_period(client):
-    ov = client.get("/api/v1/overview").json()
-    assert ov["totals"]["sent"] == 100_000 and ov["previous"] is None
-    ov = client.get("/api/v1/overview", params={"date_from": "2026-09-11", "date_to": "2026-09-20"}).json()
-    assert ov["previous"]["from"] == "2026-09-01" and ov["previous"]["to"] == "2026-09-10"
-    assert ov["previous"]["sent"] == 100_000          # les broadcasts du 10/09 tombent dans la période précédente
-    assert ov["totals"]["sent"] == 0
-
-
-def test_anomalies_summary_empty(client):
-    s = client.get("/api/v1/anomalies/summary").json()
-    assert s == {"by_severity": [], "by_day": [], "by_rule": []}
-
-
-def test_concurrent_requests_do_not_trip_sqlite_thread_check(client):
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(8) as ex:
-        codes = list(ex.map(lambda _: client.get("/api/v1/snapshots").status_code, range(40)))
-    assert set(codes) == {200}
-
-
-def test_overview_with_zero_im_attempts_returns_json_not_500(client):
-    """Filtre IM sans aucune tentative : le Failure % est 0/0 (NaN) ; l'API doit répondre null, pas 500."""
-    r = client.get("/api/v1/overview", params={"rule": "inexistante"})
-    assert r.status_code == 200
+def test_alert_settings_expose_no_secret(client, monkeypatch):
+    monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://example.webhook.office.com/x?sig=SECRET123")
+    body = client.get("/api/v1/settings/alerts").text
+    assert "SECRET123" not in body and "example.webhook.office.com" in body
 
 
 def test_nan_values_are_serialised_as_null():
-    from cvm_monitor.api.main import _clean
-    assert _clean({"a": float("nan"), "b": [1.0, float("inf")], "c": {"d": 2.5}}) == {"a": None, "b": [1.0, None], "c": {"d": 2.5}}
+    assert api._clean({"a": float("nan"), "b": [1.0, float("inf")], "c": {"d": 2.5}}) == {"a": None, "b": [1.0, None], "c": {"d": 2.5}}

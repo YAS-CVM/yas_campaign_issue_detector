@@ -23,6 +23,7 @@ def _webhook_hint(url: str | None) -> str | None:
 def channel_status(cfg: Config) -> dict[str, Any]:
     teams_cfg, mail_cfg = cfg.notify.get("teams", {}), cfg.notify.get("email", {})
     webhook = cfg.env("TEAMS_WEBHOOK_URL")
+    smtp_host, smtp_port = mail.smtp_server(cfg)
     return {
         "teams": {
             "configured": bool(webhook), "enabled": bool(teams_cfg.get("enabled", True)),
@@ -32,11 +33,10 @@ def channel_status(cfg: Config) -> dict[str, Any]:
         },
         "email": {
             "configured": mail.is_configured(cfg), "enabled": bool(mail_cfg.get("enabled", True)),
-            "backend": mail_cfg.get("backend", "smtp"), "min_severity": mail_cfg.get("min_severity"),
-            "recipients": mail.recipients(cfg), "smtp_host": cfg.env("SMTP_HOST"), "smtp_port": cfg.env("SMTP_PORT"),
+            "backend": mail.backend(cfg), "min_severity": mail_cfg.get("min_severity"),
+            "recipients": mail.recipients(cfg), "smtp_host": smtp_host, "smtp_port": smtp_port,
             "sender": cfg.env("MAIL_FROM") or cfg.env("SMTP_USER"),
-            "missing": [k for k, ok in (("MAIL_TO", bool(mail.recipients(cfg))),
-                                         ("SMTP_HOST", mail_cfg.get("backend", "smtp") == "outlook" or bool(cfg.env("SMTP_HOST")))) if not ok],
+            "missing": mail.missing_settings(cfg),
         },
         "dashboard_url": cfg.notify.get("dashboard_url"),
     }
@@ -65,7 +65,7 @@ def send_test(cfg: Config, channel: str) -> dict[str, Any]:
             return {"ok": True, "message": "Message de test publié dans Teams.", "at": at}
         if channel == "email":
             if not mail.is_configured(cfg):
-                return {"ok": False, "message": "Non configuré : MAIL_TO et SMTP_HOST (ou backend outlook) sont requis", "at": at}
+                return {"ok": False, "message": f"Non configuré : à renseigner dans config/.env : {', '.join(mail.missing_settings(cfg))}", "at": at}
             mail.send_email(cfg, "[Yas CVM Monitor] Test", "<p>Les alertes e-mail fonctionnent.</p>",
                             "Les alertes e-mail fonctionnent.")
             return {"ok": True, "message": f"E-mail de test envoyé à {', '.join(mail.recipients(cfg))}.", "at": at}

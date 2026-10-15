@@ -47,21 +47,29 @@ def stuck_delivering(ctx: RuleContext, p: dict):
                      f"Generated {fmt_int(vol)}/jour, Sent {fmt_int(g['sent'].sum())}, "
                      f"Delivered {fmt_int(g['delivered'].sum())}."),
             details={"broadcast_ids": g["broadcast_id"].tolist(), "last_date": last,
-                     "campaign": _first(g, "campaign_name")},
+                     "campaign": _first(g, "campaign_name"),
+                     "impact": f"{fmt_int(vol)} clients/jour non servis",
+                     "action": "Vérifier l'exécution dans NEON-dx et relancer le broadcast."},
         )
 
 
-@rule("PM-EXE-02", "Status Aborted / Delivery Stalled", "push", "major")
+@rule("PM-EXE-02", "Status Aborted / Delivery Stalled", "push", "major", min_volume=0)
 def aborted(ctx: RuleContext, p: dict):
+    """Arrêt anormal d'un broadcast à fort volume ; un arrêt dans la fenêtre de blackout SMS est attendu."""
     df = ctx.push[ctx.push["status"].isin(["Aborted", "Delivery Stalled"])]
+    df = df[~ctx.in_blackout(df["scheduled_at"])] if "scheduled_at" in df else df
     for r in df.itertuples():
         vol = max(r.generated, r.sent)
+        if vol < p["min_volume"]:
+            continue
         yield Anomaly(
             entity_type="broadcast", entity_key=str(r.broadcast_id), date=r.date, category=r.category,
             severity=ctx.scaled(p["severity"], vol), metric="status", expected="Completed", volume=vol,
             message=(f"« {r.bc_name} » ({r.date}) : Status {r.status}, Generated {fmt_int(r.generated)}, "
                      f"Sent {fmt_int(r.sent)}, Delivered {fmt_int(r.delivered)}."),
-            details={"bc_name": r.bc_name, "status": r.status, "campaign": r.campaign_name},
+            details={"bc_name": r.bc_name, "status": r.status, "campaign": r.campaign_name,
+                     "impact": f"{fmt_int(vol)} clients non servis",
+                     "action": "Relancer le broadcast ou le reprogrammer hors blackout (19h-07h)."},
         )
 
 
@@ -114,6 +122,43 @@ def generated_not_sent(ctx: RuleContext, p: dict):
             volume=r.generated,
             message=f"« {r.bc_name} » ({r.date}) : Generated {fmt_int(r.generated)}, Sent 0 (Status {r.status}).",
             details={"bc_name": r.bc_name, "status": r.status},
+        )
+
+
+# Statuts dont la sémantique est connue ; tout autre statut est transitoire (ou nouveau) et ne doit pas durer.
+KNOWN_STATUSES = {"Completed", "Delivering", "Paused", "Aborted", "Delivery Stalled", "Blackout Pause", "Blackout Expired"}
+
+
+@rule("PM-EXE-06", "Blackout expiré : volume jamais envoyé", "push", "major", min_generated=1000, max_sent_ratio=0.01)
+def blackout_expired_unsent(ctx: RuleContext, p: dict):
+    """La fenêtre de blackout a expiré avant l'envoi : le volume ciblé n'est jamais parti."""
+    df = ctx.push[(ctx.push["status"] == "Blackout Expired") & (ctx.push["generated"] >= p["min_generated"])]
+    df = df[df["sent"] <= df["generated"] * p["max_sent_ratio"]]
+    for r in df.itertuples():
+        unsent = int(r.generated - r.sent)
+        yield Anomaly(
+            entity_type="broadcast", entity_key=str(r.broadcast_id), date=r.date, category=r.category,
+            severity=ctx.scaled(p["severity"], unsent), metric="unsent", value=unsent, expected="envoi avant expiration",
+            volume=unsent,
+            message=(f"« {r.bc_name} » ({r.date}) : blackout expiré, {fmt_int(r.generated)} clients ciblés, "
+                     f"{fmt_int(r.sent)} envoyés. À reprogrammer hors fenêtre de blackout."),
+            details={"bc_name": r.bc_name, "campaign": r.campaign_name, "generated": int(r.generated), "sent": int(r.sent)},
+        )
+
+
+@rule("PM-EXE-07", "Statut transitoire prolongé", "push", "major", min_days=1)
+def transient_status(ctx: RuleContext, p: dict):
+    """Broadcast resté plus d'un jour dans un statut transitoire ou inconnu (Targeting, Render Scheduled…)."""
+    df = ctx.push[~ctx.push["status"].isin(KNOWN_STATUSES) & (ctx.push["age_days"] >= p["min_days"])]
+    for r in df.itertuples():
+        vol = int(max(r.generated, r.sent))
+        yield Anomaly(
+            entity_type="broadcast", entity_key=str(r.broadcast_id), date=r.date, category=r.category,
+            severity=ctx.scaled(p["severity"], vol), metric="status_age_days", value=int(r.age_days),
+            expected="Completed", volume=vol,
+            message=(f"« {r.bc_name} » ({r.date}) toujours en Status « {r.status} » à J+{r.age_days} "
+                     f"(Generated {fmt_int(r.generated)}, Sent {fmt_int(r.sent)})."),
+            details={"bc_name": r.bc_name, "status": r.status, "campaign": r.campaign_name},
         )
 
 
@@ -204,7 +249,8 @@ def delivery_drop(ctx: RuleContext, p: dict):
         g = g.set_index("date").sort_index()
         rate = g["delivered"] / g["sent"]
         rate[g["sent"] < p["min_sent"]] = float("nan")
-        res = pct.history_outliers(rate, pct.LOW, pc, min_abs_gap=p["min_abs_gap"])
+        not_fed = (g["delivered"] == 0) & (g["sent"] > 0)  # Delivered non remonté ce jour-là (FEED-03)
+        res = pct.history_outliers(rate, pct.LOW, pc, min_abs_gap=p["min_abs_gap"], exclude=not_fed)
         for run in pct.runs(res, current_dates):
             # un épisode = jours hors norme consécutifs ; un seul jour = minor, 2 jours et + = sévérité de la règle
             first, last, days = run.index[0], run.index[-1], len(run)
@@ -279,7 +325,8 @@ def no_conversion(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-PRF-02", "% Net Conversion négatif", "push", "minor", min_cg=1000, min_cg_conversions=30, p_value=0.05)
+@rule("PM-PRF-02", "% Net Conversion négatif", "push", "minor", min_cg=1000, min_cg_conversions=30, p_value=0.05,
+      major_lost=500)
 def negative_uplift(ctx: RuleContext, p: dict):
     df = _mature(ctx)
     for bc, g, first, last, days in _episodes_by_bc(df):
@@ -293,11 +340,15 @@ def negative_uplift(ctx: RuleContext, p: dict):
         lost = int(-res.uplift * tg)
         yield Anomaly(
             entity_type="bc_name", entity_key=bc, date=first, category=_first(g, "category"),
+            severity=p["severity"] if lost >= p["major_lost"] else "minor",  # notifié seulement si l'enjeu est réel
             metric="uplift", value=round(res.uplift, 5), expected="≥ 0", volume=int(tg),
-            message=(f"« {bc} » : TG Conv% {fmt_pct(res.tg_rate)} < % CG Conversion {fmt_pct(res.cg_rate)} "
-                     f"(p = {res.p_value:.3f}), ~{fmt_int(lost)} Conv en moins ({first} → {last})."),
+            message=(f"« {bc} » n'apporte aucune conversion incrémentale : les clients ciblés convertissent moins "
+                     f"({fmt_pct(res.tg_rate)}) que le groupe de contrôle ({fmt_pct(res.cg_rate)}, p = "
+                     f"{res.p_value:.3f}), ~{fmt_int(lost)} conversions en moins ({first} → {last})."),
             details={"tg": int(tg), "tg_conv": int(tg_conv), "cg": int(cg), "cg_conv": int(cg_conv),
-                     "ci95": [round(res.ci_low, 5), round(res.ci_high, 5)]},
+                     "ci95": [round(res.ci_low, 5), round(res.ci_high, 5)],
+                     "impact": f"~{fmt_int(lost)} conversions perdues vs groupe de contrôle",
+                     "action": "Revoir le ciblage ou l'offre, ou suspendre ce BC."},
         )
 
 
@@ -324,9 +375,11 @@ def push_fulfillment_failure(ctx: RuleContext, p: dict):
             expected=(f"< {fmt_pct(p['max_failure_rate'])}" if r["mode"] == "static"
                       else f"< {fmt_pct(r['p_high'])} (P95 des pairs)"),
             volume=int(r["failures"]),
-            message=(f"« {bc} » ({r['first']} → {r['last']}) : Fulfillment Failure {fmt_int(r['failures'])} "
-                     f"({fmt_pct(r['rate'])}). {_position(r, pct.HIGH)}."),
-            details={"success": int(r["success"]), "broadcast_ids": r["broadcast_ids"], **pct.info(r)},
+            message=(f"« {bc} » ({r['first']} → {r['last']}) : l'offre n'est pas livrée à {fmt_int(r['failures'])} "
+                     f"clients ayant converti ({fmt_pct(r['rate'])} d'échecs de fulfillment). {_position(r, pct.HIGH)}."),
+            details={"success": int(r["success"]), "broadcast_ids": r["broadcast_ids"], **pct.info(r),
+                     "impact": f"{fmt_int(r['failures'])} clients sans leur offre",
+                     "action": "Vérifier le provisioning de l'offre côté plateforme/produit."},
         )
 
 

@@ -40,7 +40,8 @@ Point d'entrée : `pipeline.process_file` enchaîne les cinq étapes. Un fichier
 | `ack` | Acquitte ou met en sourdine des anomalies |
 | `report` | Rapport Excel hebdomadaire ou mensuel |
 | `preview`, `notify-test` | Aperçu de l'e-mail, test des canaux |
-| `dashboard` | Lance le tableau de bord (Streamlit) |
+| `dashboard`, `serve` | Sert le tableau de bord statique et les actions (acquitter, importer) |
+| `build-site` | Régénère le tableau de bord statique |
 
 ---
 
@@ -58,7 +59,7 @@ Un fichier par jour, nommé `Yas_Senegal_Daily_Dashboard_till_<JJ>_<Mois>_<AAAA>
 | Broadcast ID / Name | `broadcast_id`, `broadcast_name` | Un envoi précis |
 | **BC Name** | `bc_name` | Le « Broadcast Config » : regroupe les envois d'une même programmation. C'est l'entité principale des alertes |
 | Campaign Name / ID | `campaign_name`, `campaign_id` | La campagne |
-| Campaign Category | `category` | Famille : Bundle Drive, CVM, DATAFRAMEWORK, Engagements, Informative, Nursery, Upsell, Voice |
+| Campaign Category | `category` | Famille : Bundle Drive, Churn_Reactive, CVM, DATAFRAMEWORK, Engagements, Informative, Nursery, Retention_CPM, Upsell, Voice, UAT (test). Voir la hiérarchie ci-dessous |
 | Status | `status` | État du broadcast (voir 3.3) |
 | Generated | `generated` | Messages **préparés** (cible générée) |
 | Sent | `sent` | Messages **envoyés** à l'opérateur |
@@ -73,6 +74,69 @@ Un fichier par jour, nommé `Yas_Senegal_Daily_Dashboard_till_<JJ>_<Mois>_<AAAA>
 | Is Seeding | `is_seeding` | Envoi « seeding » (bonus crédité directement) |
 
 Les colonnes de pourcentage de la source (`Acknowledged %`, `Conversion %`, …) sont lues mais **les indicateurs sont recalculés** à partir des volumes, pour éviter toute incohérence.
+
+#### Hiérarchie Push : de la catégorie au broadcast
+
+Les lignes Data_Push s'organisent en quatre niveaux emboîtés. Chaque niveau a **un seul parent** (vérifié sur les fichiers d'août à octobre 2026 : aucune campagne dans deux catégories, aucun BC dans deux campagnes).
+
+```
+CATÉGORIE                 Campaign Category     ex. CVM
+ └─ CAMPAGNE              Campaign Name / ID    ex. SitesBoost
+     └─ BC                BC Name               ex. SitesBoost_Ancre_600F
+         └─ BROADCAST     Broadcast ID / Name   ex. #148051 · envoi du 06/10/2026 · Completed
+```
+
+```mermaid
+flowchart TD
+  CAT["Catégorie<br/>CVM"] --> CAMP["Campagne<br/>SitesBoost"]
+  CAMP --> BC1["BC<br/>SitesBoost_Ancre_600F"]
+  CAMP --> BC2["BC<br/>SitesBoost_Ancre_1200F"]
+  CAMP --> BC3["BC<br/>SitesBoost_9sites_1000"]
+  BC1 --> B1["Broadcast #148051<br/>06/10 · Completed"]
+  BC1 --> B2["Broadcast #147950<br/>05/10 · Completed"]
+  BC1 --> B3["… 63 broadcasts sur la période"]
+```
+
+| Niveau | Colonne NEON-dx | Ce que c'est | Parent |
+|---|---|---|---|
+| **Catégorie** | `Campaign Category` | Famille métier (CVM, Informative, Engagements, Retention_CPM…) | — |
+| **Campagne** | `Campaign Name` / `Campaign ID` | Programme marketing (ex. SitesBoost, Inactivity Campaign) | une seule catégorie |
+| **BC** | `BC Name` | Broadcast Config : une programmation de la campagne (message, offre, cible). Entité principale des alertes | une seule campagne |
+| **Broadcast** | `Broadcast ID` / `Broadcast Name` | Un envoi daté : une exécution du BC, avec statut, volumes et conversions | un seul BC |
+
+Un BC récurrent produit **un broadcast par jour d'envoi** : `SitesBoost_Ancre_600F` compte ainsi 63 broadcasts sur la période.
+
+Exemple réel :
+
+```
+CVM  (2 campagnes · 30 BC · 334 broadcasts)
+ └─ SitesBoost
+     ├─ SitesBoost_Ancre_600F      63 broadcasts → #148051 (06/10), #147950 (05/10), …
+     ├─ SitesBoost_Ancre_1200F     59 broadcasts → #148060 (06/10), #147957 (05/10), …
+     └─ SitesBoost_9sites_1000     41 broadcasts → #145425 (18/09), …
+```
+
+Volumes observés sur les fichiers du 01/08 au 06/10/2026 (11 catégories · 52 campagnes · 564 BC · 5 298 broadcasts) :
+
+| Catégorie | Campagnes | BC | Broadcasts |
+|---|---:|---:|---:|
+| Informative | 7 | 276 | 1 508 |
+| Engagements | 2 | 51 | 833 |
+| Bundle Drive Campaign | 5 | 52 | 701 |
+| Nursery Campaign | 6 | 17 | 699 |
+| DATAFRAMEWORK | 4 | 71 | 561 |
+| Retention_CPM | 16 | 42 | 372 |
+| CVM | 2 | 30 | 334 |
+| Voice Campaigns | 3 | 8 | 148 |
+| Upsell Campaign | 2 | 2 | 90 |
+| Churn_Reactive | 4 | 9 | 46 |
+| UAT (test) | 1 | 6 | 6 |
+
+Points d'attention :
+
+- **Nom de BC qui change** : pour 8 broadcasts, NEON-dx a ajouté l'horodatage au nom du BC d'un fichier à l'autre (`Adu boost followup_ILLIMAX 200F` → `Adu boost followup_ILLIMAX 200F-01 Sep 2026 14:00 GMT`). Le `Broadcast ID` reste la clé fiable d'un envoi.
+- **Agrégation** : à chaque niveau, les volumes (Sent, Conversions…) sont **sommés**, puis les taux recalculés. On ne fait jamais la moyenne des taux des niveaux inférieurs.
+- **Dans le tableau de bord** : l'onglet Push › « Campagnes » suit l'arbre Campagne → BC → Broadcast (catégorie affichée à côté de chaque campagne) ; « Par catégorie » descend d'une catégorie vers ses campagnes ; « Top des BC » classe les BC par volume, base par envoi (Sent moyen d'un broadcast) ou fréquence (jours d'envoi) ; un clic ouvre la fiche de la campagne, du BC ou du broadcast.
 
 ### 3.2 Data_IM : l'inbound (Interaction Manager)
 
@@ -195,9 +259,31 @@ Ne sont évalués que les envois matures. Le seeding est exclu par défaut.
 
 ## 7. Les règles de détection
 
+## 7.0 Alertes business : le jeu notifié
+
+Seules les règles « actionnables » alertent (mail / Teams). Question test : *quelqu'un doit-il agir aujourd'hui pour protéger des conversions ou du revenu ?*
+
+| Règle | Alerte |
+|---|---|
+| BIZ-CONV-01 | un BC convertit moins que sa propre normale (P5 des 28 jours précédents), chiffré en conversions et valeur perdues |
+| BIZ-OFR-01 | une offre Inbound a un taux d'achat sous sa propre normale, chiffré en achats perdus |
+| PM-PRF-02 | uplift négatif significatif (major si ≥ 500 conversions perdues) |
+| PM-PRF-03, IM-FUL-01 | offre non livrée (échecs de fulfillment) |
+| PM-EXE-01, PM-EXE-02 | broadcast à gros volume bloqué ou arrêté, hors blackout |
+| FEED-01, FEED-03 | fichier du jour absent, métrique clé à 0 |
+
+Toutes les autres règles sont plafonnées à `info` (`max_severity: info` dans `config.yaml`) : visibles dans l'onglet Alertes, jamais notifiées. Aucune donnée n'est masquée.
+
+**Blackout SMS** (`detection.sms_blackout`, 19h-07h) : réglementaire, donc normal. Un arrêt dans cette fenêtre n'alerte pas (`RuleContext.in_blackout`), et les heures de blackout sont exclues du classement des heures d'envoi. Minuit pile = flow déclenché, jamais considéré comme blackout.
+
+Chaque alerte porte `details.impact` (chiffrage) et `details.action` (suggestion), repris dans le digest et la carte Teams.
+
+**Analytique « quand envoyer »** (`services/timing.py`, onglet Analytics > Quand envoyer) : jour et heure d'envoi classés par indice de conversion (conversions ÷ conversions attendues au Conv % habituel des mêmes BC, donc indépendant du mix de campagnes), meilleurs créneaux jour × heure, BC en déclin (7 j vs 28 j) et meilleurs BC.
+
+
 Une **règle** observe un snapshot et produit des **anomalies**. Chacune a : un identifiant (ex. `PM-DLV-03`), une sévérité, une entité concernée, un volume impacté et un message explicatif.
 
-Préfixes : `PM` = Push, `IM` = Inbound, `SNP` = comparaison de snapshots. Familles : `EXE` exécution, `DLV` livraison, `PRF` performance, `FUL` fulfillment, `IMP` impressions, `DQ` qualité des données.
+Préfixes : `PM` = Push, `IM` = Inbound, `SNP` = comparaison de snapshots, `FEED` = le flux NEON-dx lui-même. Familles : `EXE` exécution, `DLV` livraison, `PRF` performance, `FUL` fulfillment, `IMP` impressions, `DQ` qualité des données.
 
 ### 7.1 Deux familles de règles
 
@@ -210,6 +296,8 @@ Préfixes : `PM` = Push, `IM` = Inbound, `SNP` = comparaison de snapshots. Famil
 | PM-EXE-03 | Broadcast Paused |
 | PM-EXE-04 | Broadcast en Blackout (rétrogradé en **info** : attendu, consultation seule) |
 | PM-EXE-05 | Generated ≥ 1 000 mais Sent = 0 (ciblé, jamais envoyé) |
+| PM-EXE-06 | Blackout expiré avant l'envoi : volume ciblé jamais parti (Sent ≤ 1 % de Generated) |
+| PM-EXE-07 | Statut transitoire ou inconnu (Targeting, Render Scheduled…) depuis au moins 1 jour |
 | PM-PRF-02 | Uplift négatif **significatif** (le test z de la section 6) |
 | PM-DQ-01 | Sent > Generated |
 | PM-DQ-02 | Conversions > Sent pour une campagne |
@@ -219,9 +307,9 @@ Préfixes : `PM` = Push, `IM` = Inbound, `SNP` = comparaison de snapshots. Famil
 | PM-DQ-06 | Jour manquant dans les données |
 | IM-DQ-01 | Conversions IM non alimentées (conv ÷ succès < 1 %) |
 | IM-DQ-02 | Touchpoint avec impressions mais aucun fulfillment |
-| IM-DQ-03 | Règle IM active dont le Last Refresh est en retard |
+| IM-DQ-03 | Règle IM Active non rafraîchie depuis plus de 48 h (référence : lendemain du fichier, 06 h GMT) |
 | SNP-01 | Broadcast **révisé** : des chiffres censés être figés ont changé depuis le fichier précédent |
-| SNP-02 | Broadcast **disparu** du fichier courant |
+| SNP-02 | Broadcasts **disparus** : vus dans un fichier antérieur du même mois, absents du fichier courant. Comparé à tout l'historique : l'alerte reste ouverte tant qu'ils manquent ; le changement de mois n'est pas une disparition |
 | SNP-03 | Données IM de jours clos modifiées |
 
 **B. Règles de performance par percentiles (relatives)** : ce qui est « anormal » est défini par la distribution réellement observée, pas par un chiffre fixé à la main. C'est le cœur de la méthode (section 8).
@@ -237,6 +325,24 @@ Préfixes : `PM` = Push, `IM` = Inbound, `SNP` = comparaison de snapshots. Famil
 | PM-DLV-02 | Delivery% journalier (par catégorie et total) | trop bas | historique propre |
 | IM-FUL-02 | Failure% journalier IM global | trop haut | historique propre |
 | IM-IMP-02 | Impressions journalières (par touchpoint et programme) | trop bas | historique propre |
+
+**C. Règles sur le flux NEON-dx** : elles jugent la donnée, pas les campagnes. Une donnée manquante ou un format qui
+change doit être signalé (et remonté à Flytxt) avant de fausser les autres règles.
+
+| Règle | Détecte |
+|---|---|
+| FEED-01 | Jours sans fichier depuis le début du mois (majeure en fin de mois ou à partir de 3 jours) |
+| FEED-02 | Colonnes ajoutées ou retirées, nouvelle valeur de Status / catégorie / touchpoint / programme, colonne qui se remplit (info) ou se vide |
+| FEED-03 | Métrique vide (ou quasi) des jours où son volume existe alors qu'elle est renseignée les autres jours du fichier (ex. fulfillment IM du 01 au 18/08) ; remplissage d'une colonne en forte baisse |
+| FEED-04 | Au premier fichier d'un mois : envois de fin du mois précédent sortis des fichiers avant maturité, conversions estimées manquantes |
+| FEED-06 | Conversions des envois récents qui progressent beaucoup moins que la courbe de maturité : attribution en retard |
+
+Le fichier attendu mais **non reçu** ne peut pas être détecté à l'import : `cvm-monitor run` (inbox vide) et
+`cvm-monitor feed-check` alertent une fois par fichier attendu après l'heure limite (`feed.deadline`, 10 h par défaut).
+
+Les références d'historique (PM-DLV-02) excluent les jours où la métrique n'était pas alimentée, sans cesser de
+juger ces jours. Les pairs des règles IM sont d'abord les règles du même touchpoint **et** programme, puis du
+touchpoint s'il y a moins de 20 pairs. La chute d'impressions (IM-IMP-02) tient compte du jour de semaine.
 
 ### 7.2 Périmètres appliqués avant le calcul
 
@@ -344,6 +450,7 @@ Chaque anomalie a une **empreinte** (`règle | type d'entité | clé de l'entit�
 | **Rapport Excel** | Synthèse hebdo ou mensuelle : jours, catégories, campagnes, BC, IM, anomalies | commande `report` |
 
 - **Rappel** : une anomalie encore ouverte et déjà notifiée depuis plus de 3 jours (`realert_after_days`) est rappelée.
+- **Fichier non reçu** : après l'heure limite, une alerte Teams / e-mail par fichier attendu (journal `notifications`, canal `feed-check:<date>`).
 - Les anomalies `info` ne sont jamais envoyées par e-mail ni Teams : elles restent dans le dashboard et le CSV.
 - Chaque envoi est tracé dans la table `notifications`.
 
@@ -351,21 +458,39 @@ Chaque anomalie a une **empreinte** (`règle | type d'entité | clé de l'entit�
 
 ## 12. Le tableau de bord
 
-Lancement : `python -m cvm_monitor.cli dashboard` (port 8000).
+Lancement : `cvm-monitor serve` (ou `dashboard`), port 8000. Le site est une page statique **régénérée après chaque
+import et chaque acquittement** (`site/build.py`) : toutes les données y sont embarquées, filtres et onglets sont
+calculés dans le navigateur, sans requête réseau à l'affichage. Les agrégations du navigateur (`site/static/kpi.js`)
+reprennent les formules de `analytics/kpi.py` (un test vérifie la parité) ; les statistiques (percentiles, z-test,
+maturité) sont pré-calculées en Python pour les périodes 7 j, 30 j, mois en cours et tout l'historique.
 
-| Page | Ce qu'on y voit | Question à laquelle elle répond |
+| Onglet | Ce qu'on y voit | Question à laquelle il répond |
 |---|---|---|
-| **Overview** | 6 tuiles KPI vs 7 jours, anomalies ouvertes par sévérité, top 10 critiques et majeures, Sent par catégorie, Delivery%, Impression par touchpoint, Failure% | « Comment va-t-on aujourd'hui ? » |
-| **Anomalies** | Liste filtrable, détail, acquittement et sourdine | « Que dois-je traiter ? » |
-| **Importer** | Dépôt de fichiers .xlsb, traitement immédiat | « Je charge le fichier du jour » |
-| **Push** | Entonnoir, statuts, carte de chaleur Delivery% par catégorie et par jour, tableau des broadcasts | « Où se perd-on dans le parcours du message ? » |
-| **Inbound** | Impressions, achats, Conv%, Failure%, pires règles IM | « Quelles règles d'offre échouent ? » |
-| **Campagnes** | Uplift TG vs CG par campagne ou BC, IC 95 %, p-value, verdict, détail d'une campagne | « Cette campagne sert-elle vraiment ? » |
-| **Maturité des Conv** | Courbe de complétude, conversions par jour | « Peut-on se fier aux conversions récentes ? » |
-| **Snapshots** | Fichiers ingérés, comparaison de deux fichiers, révisés et disparus | « Les chiffres passés ont-ils bougé ? » |
-| **Qualité des données** | Contrôles sur le dernier fichier, anomalies DQ et SNP | « Les données sont-elles fiables ? » |
+| **Push Campaigns** | Jour J (écart vs 7 j et vs même jour de semaine), exécution au dernier fichier et transitions de statut, entonnoir, séries, carte de chaleur, top des BC (volume, base par envoi, fréquence ; BC techniques exclus par défaut), explorateur Campagne → BC → Broadcast, versions successives d'un broadcast | « Nos envois partent-ils, arrivent-ils, convertissent-ils ? » |
+| **Inbound Marketing** | Jour J, touchpoints, programmes, règles IM et leur fraîcheur, offres | « Les offres présentées sont-elles achetées, les données sont-elles à jour ? » |
+| **Analytics** | Incrémentalité (uplift, IC 95 %, verdict), potentiel d'amélioration, distributions et seuils, tendances, maturité par métrique, arrivée des données | « Qu'est-ce que ça rapporte, où agir, peut-on se fier aux chiffres ? » |
+| **Alertes** | Santé du flux NEON-dx, file de traitement avec acquittement, tendance, catalogue, notifications | « Que dois-je traiter et prévenir aujourd'hui ? » |
 
----
+### 12.1 Complétude d'un chiffre
+
+| État | Affichage | Sens |
+|---|---|---|
+| Définitif | normal | La valeur ne bougera plus |
+| En maturation | *italique pointillé*, estimation « ≈ X à maturité » | Âge inférieur à l'âge de référence ; estimation = observé ÷ complétude de la courbe de la métrique |
+| Non renseigné | `n/r` | NEON-dx ne fournit pas la donnée (ex. Generated des flows) : ce n'est pas 0 |
+| Tronqué | badge « tronqué » | Envoi de fin de mois sorti des fichiers avant maturité (le fichier ne couvre que le mois en cours) |
+| Disparu | badge « disparu » | Broadcast absent des fichiers suivants **du même mois** : perte côté NEON-dx |
+
+Les courbes de maturité sont calculées **métrique par métrique** (`analytics/maturity.maturity_curves`) :
+Sent, Acknowledged, Delivered et CG size sont complets dès J0 ; conversions, valeur, fulfillment et conversions du
+groupe de contrôle arrivent sur trois à quatre jours.
+
+### 12.2 Santé du flux NEON-dx
+
+Bandeau de l'onglet Alertes et pastille de l'en-tête. Signaux calculés sur les fichiers reçus : fraîcheur du
+dernier fichier, fichiers manquants, lignes en baisse d'un fichier au suivant dans un même mois, broadcasts disparus,
+envois tronqués en fin de mois, colonnes dont le remplissage change (une colonne vide est suivie : elle peut se
+remplir à J+x), jours IM sans fulfillment, touchpoint sans fulfillment.
 
 ## 13. Configuration
 

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from . import rules_im, rules_push, rules_snapshot  # noqa: F401  (enregistrement des règles)
+from ..config import severity_rank
+from . import rules_business, rules_feed, rules_im, rules_push, rules_snapshot  # noqa: F401  (enregistrement des règles)
 from .base import REGISTRY, Anomaly, RuleContext
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ def run_rules(ctx: RuleContext, only: set[str] | None = None) -> tuple[list[Anom
         for a in found:
             a.rule_id, a.rule_name, a.scope = rule_id, spec.name, spec.scope
             a.severity = a.severity or params["severity"]
+            cap = params.get("max_severity")  # règle rétrogradée : visible dans le site, jamais notifiée
+            if cap and severity_rank(a.severity) > severity_rank(cap):
+                a.severity = cap
         anomalies.extend(found)
         executed.add(rule_id)
 

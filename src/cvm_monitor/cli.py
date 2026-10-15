@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -36,6 +35,8 @@ def _print_result(r) -> None:
         typer.echo(f"  CSV : {r.report_path}")
     for channel, status in r.notifications.items():
         typer.echo(f"  {channel} : {status}")
+    if r.site:
+        typer.echo(f"  {r.site}")
 
 
 @app.command()
@@ -46,20 +47,25 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ):
     """Traite les nouveaux fichiers : ingestion, détection, alertes."""
-    from .pipeline import pending_files, process_file
+    from .pipeline import pending_files, process_file, rebuild_site
     cfg = _setup(config, verbose)
     files = file or pending_files(cfg)
     if not files:
         typer.echo(f"Aucun fichier à traiter dans {cfg.path('inbox')}")
+        _feed_check(cfg, send=not no_notify)
         return
-    failed = False
+    failed = processed = False
     for f in files:
         try:
-            _print_result(process_file(cfg, f, notify=not no_notify))
+            r = process_file(cfg, f, notify=not no_notify, build=False)
+            processed |= not r.skipped
+            _print_result(r)
         except Exception as e:
             failed = True
             logging.exception("Échec du traitement de %s", f)
             typer.secho(f"{Path(f).name} : ÉCHEC ({e})", fg="red", err=True)
+    if processed:  # une seule génération du tableau de bord, après le dernier fichier
+        typer.echo(rebuild_site(cfg))
     raise typer.Exit(1 if failed else 0)
 
 
@@ -70,10 +76,43 @@ def backfill(
 ):
     """Historise d'anciens fichiers sans envoyer d'alertes (ne les déplace pas)."""
     from .ingest.loader import snapshot_date_from_name
-    from .pipeline import process_file
+    from .pipeline import process_file, rebuild_site
     cfg = _setup(config)
     for f in sorted(files, key=lambda p: (snapshot_date_from_name(p.name) or date.max, p.name)):
-        _print_result(process_file(cfg, f, notify=False, archive=False))
+        _print_result(process_file(cfg, f, notify=False, archive=False, build=False))
+    typer.echo(rebuild_site(cfg))
+
+
+def _feed_check(cfg, send: bool) -> bool:
+    """Signale (une fois) le fichier du jour non reçu après l'heure limite. Renvoie True s'il manque."""
+    from .notify import feed_check
+    from .storage.db import connect
+    conn = connect(cfg.path("db"))
+    try:
+        missing, sent = feed_check.notify(cfg, conn, send=send)
+    finally:
+        conn.close()
+    if missing:
+        typer.secho(missing.message(), fg="yellow")
+        for channel, status in sent.items():
+            typer.echo(f"  {channel} : {status}")
+    return missing is not None
+
+
+@app.command("feed-check")
+def feed_check_cmd(no_notify: bool = typer.Option(False, "--no-notify"), config: Optional[Path] = ConfigOpt):
+    """Vérifie que le Daily Dashboard du jour est arrivé avant l'heure limite (feed.deadline) ; alerte sinon."""
+    cfg = _setup(config)
+    if not _feed_check(cfg, send=not no_notify):
+        typer.secho("Fichier du jour reçu (ou heure limite non atteinte).", fg="green")
+
+
+@app.command("build-site")
+def build_site_cmd(config: Optional[Path] = ConfigOpt):
+    """Régénère le tableau de bord statique (site/) à partir de la base."""
+    from .site.build import build_site
+    cfg = _setup(config)
+    typer.secho(build_site(cfg).summary(), fg="green")
 
 
 @app.command()
@@ -244,13 +283,8 @@ def dashboard(
     port: int = typer.Option(8000),
     config: Optional[Path] = ConfigOpt,
 ):
-    """Lance le tableau de bord Streamlit."""
-    cfg = _setup(config)
-    app_path = Path(__file__).parent / "dashboard" / "app.py"
-    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port),
-           "--browser.gatherUsageStats", "false"]
-    env = {**os.environ, "CVM_MONITOR_CONFIG": str(cfg.config_path)}
-    raise typer.Exit(subprocess.call(cmd, env=env))
+    """Lance le tableau de bord (alias de `serve`)."""
+    serve(port=port, host="0.0.0.0", reload=False, config=config)
 
 
 @app.command()
@@ -260,18 +294,30 @@ def serve(
     reload: bool = typer.Option(False, help="Rechargement auto (développement)."),
     config: Optional[Path] = ConfigOpt,
 ):
-    """Lance l'API FastAPI (et sert web/dist s'il existe)."""
+    """Sert le tableau de bord statique (site/) et l'API d'écriture (acquittements, import, tests d'alerte)."""
     import socket
 
     import uvicorn
     cfg = _setup(config)
     os.environ["CVM_MONITOR_CONFIG"] = str(cfg.config_path)
     if host in ("0.0.0.0", "::"):
-        try:
-            lan = socket.gethostbyname(socket.gethostname())
+        try:  # adresse de l'interface de sortie (aucun paquet n'est envoyé) ; gethostname() donne souvent 127.0.1.1
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("10.255.255.255", 1))
+                lan = s.getsockname()[0]
         except OSError:
             lan = None
-        typer.echo(f"Live on http://localhost:{port}" + (f" and http://{lan}:{port} (network)" if lan else ""))
+        try:
+            tailnet = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True,
+                                     timeout=3).stdout.split()[0]
+        except (OSError, subprocess.SubprocessError, IndexError):
+            tailnet = None
+        typer.echo(f"Live on http://localhost:{port}")
+        if lan and not lan.startswith("127."):
+            wsl = "microsoft" in Path("/proc/version").read_text(errors="ignore").lower() if Path("/proc/version").exists() else False
+            typer.echo(f"        http://{lan}:{port} ({'WSL : depuis le Windows hôte seulement' if wsl else 'réseau local'})")
+        if tailnet:
+            typer.echo(f"        http://{tailnet}:{port} (Tailscale)")
         typer.secho("Attention : No authentification", fg="yellow")
     uvicorn.run("cvm_monitor.api.main:app", host=host, port=port, reload=reload)
 

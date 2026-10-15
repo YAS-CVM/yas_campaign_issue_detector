@@ -13,7 +13,9 @@ from cvm_monitor.config import load_config
 from cvm_monitor.detect.base import RuleContext
 
 ROOT = Path(__file__).resolve().parents[1]
-REAL_FILES = sorted(ROOT.glob("Yas_Senegal_Daily_Dashboard_till_*.xlsb"))
+# Les deux fichiers de référence (01/09 et 22/09) : à la racine ou dans data/.
+REAL_FILES = sorted({p.name: p for d in (ROOT, ROOT / "data")
+                     for p in d.glob("Yas_Senegal_Daily_Dashboard_till_*_Sep_2026.xlsb")}.values(), key=lambda p: p.name)
 
 
 @pytest.fixture

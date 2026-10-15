@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     push_rows     INTEGER,
     im_rows       INTEGER,
     date_min      TEXT,
-    date_max      TEXT
+    date_max      TEXT,
+    columns       TEXT          -- JSON : colonnes brutes par feuille (changements de format NEON-dx)
 );
 
 CREATE TABLE IF NOT EXISTS anomalies (
@@ -76,7 +77,15 @@ def connect(db_path: str | Path, check_same_thread: bool = True) -> sqlite3.Conn
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Ajoute les colonnes apparues après la création d'une base existante."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(snapshots)")}
+    if "columns" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN columns TEXT")
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:

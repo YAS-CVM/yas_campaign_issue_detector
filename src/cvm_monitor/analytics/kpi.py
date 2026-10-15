@@ -93,7 +93,8 @@ def headline(push: pd.DataFrame, im: pd.DataFrame, day: str | None = None) -> di
     out = {"date": day}
     for name, frame, col in (
         ("sent", pdaily, "sent"), ("delivery_rate", pdaily, "delivery_rate"),
-        ("conversions", pdaily, "conversions"), ("impressions", idaily, "impressions"),
+        ("conversions", pdaily, "conversions"), ("conversion_value", pdaily, "conversion_value"),
+        ("impressions", idaily, "impressions"),
         ("im_success", idaily, "fulfillment_success"), ("im_failure_rate", idaily, "failure_rate"),
     ):
         cur = frame.loc[frame["date"] == day, col]

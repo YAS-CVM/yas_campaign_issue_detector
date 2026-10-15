@@ -1,0 +1,7 @@
+revenu outgoing
+revenu data
+revenu voice
+traffic data
+traffic voice
+traffic outgoing
+nbr RGS 1 7 30 90

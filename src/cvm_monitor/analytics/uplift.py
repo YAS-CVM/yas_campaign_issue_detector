@@ -1,4 +1,4 @@
-"""Mesure de l'uplift (TG vs groupe de contrôle) et test de significativité."""
+"""Mesure de l'uplift (TG vs CG) et test de significativité."""
 
 from __future__ import annotations
 

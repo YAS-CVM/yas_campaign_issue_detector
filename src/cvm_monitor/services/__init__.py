@@ -1,1 +1,1 @@
-"""Couche service neutre (sans Streamlit ni FastAPI) : filtres, agrégations, insights « valeur »."""
+"""Couche service neutre (sans FastAPI) : filtres, agrégations, insights « valeur »."""

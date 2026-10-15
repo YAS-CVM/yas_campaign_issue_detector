@@ -73,6 +73,11 @@ class RuleContext:
     prev_push: pd.DataFrame | None = None  # snapshot précédent
     prev_im: pd.DataFrame | None = None
     prev_snapshot_date: date | None = None
+    # Contexte du flux NEON-dx (règles FEED) : renseigné par pipeline.build_context, facultatif ailleurs.
+    snapshots: pd.DataFrame | None = None         # fichiers reçus jusqu'au courant inclus (id, snapshot_date, columns…)
+    versions: pd.DataFrame | None = None          # versions Push des fichiers ANTÉRIEURS (maturité de référence)
+    fill: pd.DataFrame | None = None              # taux de remplissage par fichier (snapshot_id, sheet, column, fill)
+    known_values: dict[str, set] = field(default_factory=dict)  # valeurs déjà vues avant ce fichier, par dimension
 
     @property
     def det(self) -> dict[str, Any]:
@@ -86,6 +91,19 @@ class RuleContext:
         if volume < self.det.get("low_volume", 1_000) and rank > severity_rank("minor"):
             return "minor"
         return severity
+
+    def in_blackout(self, scheduled_at: pd.Series) -> pd.Series:
+        """Broadcasts planifiés dans la fenêtre de blackout SMS (réglementaire, 19h-07h par défaut) : arrêt normal.
+
+        00:00:00 exactement = flow déclenché (pas d'heure d'envoi réelle) : jamais considéré en blackout.
+        """
+        cfg = self.det.get("sms_blackout") or {}
+        start, end = (int(str(cfg.get(k, d)).split(":")[0]) for k, d in (("start", "19:00"), ("end", "07:00")))
+        ts = pd.to_datetime(scheduled_at, errors="coerce")
+        hour = ts.dt.hour
+        inside = (hour >= start) | (hour < end) if start > end else (hour >= start) & (hour < end)
+        midnight = (hour == 0) & (ts.dt.minute == 0) & (ts.dt.second == 0)
+        return (inside & ~midnight).fillna(False)
 
     def business(self, df: pd.DataFrame) -> pd.DataFrame:
         """Retire les BC techniques (ex. « Dummy BC » qui démarrent un flow) : leur Sent n'est pas un vrai message."""

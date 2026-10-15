@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yas CVM Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a2357'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%23ffd100'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ assets['font.css'] }}">
+<link rel="stylesheet" href="{{ css }}">
+</head>
+<body>
+<header class="app-header">
+  <div class="bar">
+    <a class="brand" href="#alertes">{{ logo|safe }}<span>CVM Monitor</span></a>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <a href="#alertes" data-tab="alertes">Alertes <span class="count" id="alert-count" hidden></span></a>
+      <a href="#push" data-tab="push">Push Campaigns</a>
+      <a href="#inbound" data-tab="inbound">Inbound Marketing</a>
+      <a href="#analytics" data-tab="analytics">Analytics</a>
+    </nav>
+    <div class="hdr-right">
+      <button class="feed-pill" id="feed-pill" title="Santé du flux NEON-dx"><span class="dot"></span><span class="meta">{% if meta.latest %}Données au <strong>{{ meta.latest.date_max[8:10] }}/{{ meta.latest.date_max[5:7] }}/{{ meta.latest.date_max[:4] }}</strong> · fichier du {{ meta.latest.snapshot_date[8:10] }}/{{ meta.latest.snapshot_date[5:7] }}{% else %}Aucune donnée{% endif %}</span></button>
+      <a class="gear" href="settings.html" title="Paramètres et import" aria-label="Paramètres">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+<div class="layout">
+<aside class="sidebar filterbar" id="filterbar" aria-label="Filtres de la page"><div class="side-head">Filtres de la page</div><div class="bar"></div></aside>
+<div class="content">
+<div class="pagehead">
+  <div class="ph-title"><div class="ph-eyebrow" id="ph-eyebrow">Customer Value Management</div><h1 id="ph-h1">CVM Monitor</h1><p class="ph-sub" id="ph-sub"></p></div>
+</div>
+<div class="stickybar" id="stickybar"><div class="chips" id="chips"></div><nav class="secnav" id="secnav" hidden></nav></div>
+<main>
+  <section id="tab-push" class="tab" hidden></section>
+  <section id="tab-inbound" class="tab" hidden></section>
+  <section id="tab-analytics" class="tab" hidden></section>
+  <section id="tab-alertes" class="tab" hidden></section>
+</main>
+<footer class="app-footer">
+  <span>Source : fichiers NEON-dx (Flytxt) · conversions jugées à partir de J+{{ meta.maturity_days }} · valeur finale à J+{{ meta.maturity_reference_age }} · {% set g = meta.generated_at or '' %}généré le {{ g[8:10] }}/{{ g[5:7] }}/{{ g[:4] }} {{ g[11:16] }}</span>
+  <span>n/r = non renseigné (donnée absente, pas zéro)</span>
+</footer>
+</div>
+</div>
+<div class="drawer-bg" id="drawer-bg" hidden></div>
+<aside class="drawer" id="drawer" hidden><div class="dh"><div id="drawer-title"></div><button class="x" id="drawer-x" aria-label="Fermer">×</button></div><div class="db" id="drawer-body"></div></aside>
+<div class="tip" id="tip" hidden></div>
+<script type="application/json" id="payload">{{ payload_json|safe }}</script>
+{% for s in scripts %}<script src="{{ s }}"></script>
+{% endfor %}
+</body>
+</html>

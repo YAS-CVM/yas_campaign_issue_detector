@@ -23,7 +23,18 @@ def test_aborted_severity_scales_with_volume(cfg):
         {"status": "Completed"},
     ])
     found = sorted(run_one(make_ctx(cfg, push), "PM-EXE-02"), key=lambda a: a.volume)
-    assert [a.severity for a in found] == ["minor", "critical"]
+    assert [a.severity for a in found] == ["critical"]  # sous min_volume : pas une alerte business
+
+
+def test_aborted_in_sms_blackout_is_expected(cfg):
+    push = make_push([
+        {"status": "Aborted", "generated": 200_000, "sent": 100_000, "scheduled_at": "2026-09-10 20:30:00"},
+        {"status": "Aborted", "generated": 200_000, "sent": 100_000, "scheduled_at": "2026-09-10 10:30:00"},
+        {"status": "Aborted", "generated": 200_000, "sent": 100_000, "scheduled_at": "2026-09-10 00:00:00"},  # flow
+    ])
+    found = run_one(make_ctx(cfg, push), "PM-EXE-02")
+    assert len(found) == 2
+    assert {a.entity_key for a in found} == {"1001", "1002"}
 
 
 def test_generated_not_sent_skips_statuses_covered_elsewhere(cfg):

@@ -30,10 +30,10 @@ def snapshot_exists(conn: sqlite3.Connection, file_hash: str) -> sqlite3.Row | N
 def insert_snapshot(conn: sqlite3.Connection, snap: Snapshot) -> int:
     date_min, date_max = snap.date_range
     cur = conn.execute(
-        "INSERT INTO snapshots(file_name, file_hash, snapshot_date, ingested_at, push_rows, im_rows, date_min, date_max)"
-        " VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO snapshots(file_name, file_hash, snapshot_date, ingested_at, push_rows, im_rows, date_min, date_max,"
+        " columns) VALUES (?,?,?,?,?,?,?,?,?)",
         (snap.path.name, snap.file_hash, snap.snapshot_date.isoformat(), _now(),
-         len(snap.push), len(snap.im), date_min, date_max),
+         len(snap.push), len(snap.im), date_min, date_max, json.dumps(snap.columns, ensure_ascii=False)),
     )
     snapshot_id = cur.lastrowid
     for table, df in (("push_facts", snap.push), ("im_facts", snap.im)):
@@ -59,6 +59,54 @@ def _align_columns(conn: sqlite3.Connection, table: str, df: pd.DataFrame) -> No
         if col not in existing:
             sql_type = "REAL" if pd.api.types.is_numeric_dtype(df[col]) else "TEXT"
             conn.execute(f'ALTER TABLE {table} ADD COLUMN "{col}" {sql_type}')
+
+
+FILL_SKIP = {"snapshot_id", "date", "age_days"}
+
+
+def fill_rates(conn: sqlite3.Connection, upto_date: str | None = None) -> pd.DataFrame:
+    """Part des lignes où chaque colonne est renseignée (non vide, non nulle), fichier par fichier.
+
+    Colonnes : snapshot_id, snapshot_date, sheet (push | im), column, fill. Une colonne vide aujourd'hui peut se
+    remplir demain : on la suit au lieu de l'ignorer.
+    """
+    frames = []
+    for table, sheet in (("push_facts", "push"), ("im_facts", "im")):
+        if not table_exists(conn, table):
+            continue
+        exprs = []
+        for _, name, typ, *_ in conn.execute(f"PRAGMA table_info({table})").fetchall():
+            if name in FILL_SKIP:
+                continue
+            cond = (f'"{name}" IS NOT NULL AND "{name}" <> 0' if typ in ("INTEGER", "REAL")
+                    else f'"{name}" IS NOT NULL AND TRIM("{name}") <> \'\'')
+            exprs.append((name, f"AVG(CASE WHEN {cond} THEN 1.0 ELSE 0 END)"))
+        where = "WHERE s.snapshot_date <= ?" if upto_date else ""
+        sql = (f"SELECT f.snapshot_id, s.snapshot_date, {', '.join(e for _, e in exprs)} FROM {table} f"
+               f" JOIN snapshots s ON s.id = f.snapshot_id {where} GROUP BY f.snapshot_id")
+        rows = conn.execute(sql, (upto_date,) if upto_date else ()).fetchall()
+        wide = pd.DataFrame([tuple(r) for r in rows], columns=["snapshot_id", "snapshot_date", *[n for n, _ in exprs]])
+        long = wide.melt(id_vars=["snapshot_id", "snapshot_date"], var_name="column", value_name="fill")
+        long.insert(2, "sheet", sheet)
+        frames.append(long)
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["snapshot_id", "snapshot_date", "sheet", "column", "fill"])
+    return out.sort_values(["snapshot_date", "snapshot_id", "sheet", "column"]).reset_index(drop=True)
+
+
+DIMENSIONS = {"status": "push_facts", "category": "push_facts", "touchpoint": "im_facts", "program": "im_facts"}
+
+
+def known_values(conn: sqlite3.Connection, before_snapshot_id: int) -> dict[str, set]:
+    """Valeurs de chaque dimension déjà vues dans les fichiers antérieurs (nouveau statut, catégorie…)."""
+    out: dict[str, set] = {}
+    for col, table in DIMENSIONS.items():
+        if not table_exists(conn, table):
+            continue
+        rows = conn.execute(f'SELECT DISTINCT "{col}" FROM {table} WHERE snapshot_id <> ?'
+                            f" AND snapshot_id IN (SELECT id FROM snapshots WHERE snapshot_date <="
+                            f" (SELECT snapshot_date FROM snapshots WHERE id = ?))", (before_snapshot_id, before_snapshot_id))
+        out[col] = {r[0] for r in rows if r[0] is not None}
+    return out
 
 
 def list_snapshots(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -105,29 +153,36 @@ def push_versions(conn: sqlite3.Connection) -> pd.DataFrame:
     )
 
 
+def _latest_versions(conn: sqlite3.Connection, table: str, key: list[str], upto_date: str) -> pd.DataFrame:
+    """Dernière version de chaque ligne (clé `key`) sur les snapshots <= upto_date, dédoublonnée en SQL.
+
+    Même résultat et même ordre qu'un tri (snapshot_date, id, ordre d'insertion) suivi de
+    drop_duplicates(keep="last"), sans charger toutes les versions en mémoire.
+    """
+    part = ", ".join(f"f.{k}" for k in key)
+    return pd.read_sql(
+        f"SELECT * FROM (SELECT f.*, s.snapshot_date, s.id AS _sid, f.rowid AS _row,"
+        f" ROW_NUMBER() OVER (PARTITION BY {part} ORDER BY s.snapshot_date DESC, s.id DESC, f.rowid DESC) AS _rn"
+        f" FROM {table} f JOIN snapshots s ON s.id = f.snapshot_id WHERE s.snapshot_date <= ?)"
+        " WHERE _rn = 1 ORDER BY snapshot_date, _sid, _row",
+        conn, params=(upto_date,),
+    ).drop(columns=["_sid", "_row", "_rn"])
+
+
 def history_push(conn: sqlite3.Connection, upto_date: str) -> pd.DataFrame:
     """Dernière version connue de chaque broadcast, sur tous les snapshots <= upto_date."""
     if not table_exists(conn, "push_facts"):
         return pd.DataFrame()
-    df = pd.read_sql(
-        "SELECT p.*, s.snapshot_date FROM push_facts p JOIN snapshots s ON s.id = p.snapshot_id"
-        " WHERE s.snapshot_date <= ? ORDER BY s.snapshot_date, s.id",
-        conn, params=(upto_date,),
-    )
+    df = _latest_versions(conn, "push_facts", ["broadcast_id"], upto_date)
     if "is_seeding" in df:
         df["is_seeding"] = df["is_seeding"].astype(bool)
-    return df.drop_duplicates("broadcast_id", keep="last").reset_index(drop=True)
+    return df
 
 
 def history_im(conn: sqlite3.Connection, upto_date: str) -> pd.DataFrame:
     if not table_exists(conn, "im_facts"):
         return pd.DataFrame()
-    df = pd.read_sql(
-        "SELECT i.*, s.snapshot_date FROM im_facts i JOIN snapshots s ON s.id = i.snapshot_id"
-        " WHERE s.snapshot_date <= ? ORDER BY s.snapshot_date, s.id",
-        conn, params=(upto_date,),
-    )
-    return df.drop_duplicates(IM_KEY, keep="last").reset_index(drop=True)
+    return _latest_versions(conn, "im_facts", IM_KEY, upto_date)
 
 
 # --------------------------------------------------------------------------- anomalies

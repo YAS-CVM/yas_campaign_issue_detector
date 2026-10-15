@@ -8,3 +8,4 @@ archive/
 data/
 reports/
 *.xlsb
+/site/

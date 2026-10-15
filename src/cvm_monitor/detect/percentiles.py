@@ -81,17 +81,22 @@ def peer_outliers(table: pd.DataFrame, col: str, group_col: str | None, directio
 
 
 def history_outliers(series: pd.Series, direction: str, pc: dict[str, Any], min_abs_gap: float = 0.0,
-                     min_rel_gap: float = 0.0) -> pd.DataFrame:
+                     min_rel_gap: float = 0.0, exclude: pd.Series | None = None) -> pd.DataFrame:
     """Compare chaque point de `series` (indexée par date) à ses `history_window_days` points PRÉCÉDENTS.
 
+    `exclude` (booléens, même index) retire des points de la RÉFÉRENCE sans les soustraire à l'évaluation :
+    un jour où NEON-dx n'a pas alimenté la donnée ne doit pas fausser la normale, mais reste lui-même jugé.
     Ajoute : value, p_low, p50, p_normal_high, p_high, n, flag, consecutive (le point précédent était aussi hors norme).
     """
     s = series.sort_index().astype(float)
     values = s.to_numpy()
+    ref_values = values.copy()
+    if exclude is not None:
+        ref_values[exclude.reindex(s.index, fill_value=False).to_numpy(dtype=bool)] = np.nan
     window = int(pc["history_window_days"])
     rows = []
     for i, (idx, v) in enumerate(s.items()):
-        past = values[max(0, i - window):i]
+        past = ref_values[max(0, i - window):i]
         past = past[~np.isnan(past)]
         if len(past) < pc["min_history_points"] or np.isnan(v):
             rows.append((idx, v, np.nan, np.nan, np.nan, np.nan, len(past), False))

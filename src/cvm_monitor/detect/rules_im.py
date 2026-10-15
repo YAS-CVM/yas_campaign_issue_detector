@@ -41,8 +41,17 @@ def _peers(ctx: RuleContext, p: dict, table: pd.DataFrame, col: str, direction: 
         for c in ("p_low", "p50", "p_normal_high", "p_high"):
             out[c] = float("nan")
         return out
-    return pct.peer_outliers(table, col, "touchpoint", direction, pct.settings(ctx.det),
-                             p.get("min_abs_gap", default_gap), static_mask)
+    pc, gap = pct.settings(ctx.det), p.get("min_abs_gap", default_gap)
+    # Les programmes ont des comportements très différents (Mandatory Offer ~9 % d'achat, New Inbound Free < 1 %) :
+    # on compare d'abord aux règles du même touchpoint ET programme, puis du touchpoint s'il y a trop peu de pairs.
+    t = table.assign(peer_group=table["touchpoint"].astype(str) + " · " + table["program"].astype(str))
+    fine = pct.peer_outliers(t, col, "peer_group", direction, pc, gap, static_mask)
+    coarse = pct.peer_outliers(t, col, "touchpoint", direction, pc, gap, static_mask)
+    use_coarse = fine["mode"] != "percentile"
+    fine.loc[use_coarse] = coarse.loc[use_coarse]
+    fine.loc[~use_coarse, "peer_label"] = t.loc[~use_coarse, "peer_group"]
+    fine.loc[use_coarse, "peer_label"] = t.loc[use_coarse, "touchpoint"]
+    return fine
 
 
 def _position(r, direction: str) -> str:
@@ -64,13 +73,15 @@ def rule_fulfillment_failure(ctx: RuleContext, p: dict):
             entity_type="im_rule", entity_key=str(rule_id), date=_period_start(ctx), category=r["program"],
             severity=sev, metric="fulfillment_failure_rate", value=round(r["fail_rate"], 4),
             expected=(f"< {fmt_pct(p['max_failure_rate'])}" if r["mode"] == "static"
-                      else f"< {fmt_pct(r['p_high'])} (P95 des pairs {r['touchpoint']})"),
+                      else f"< {fmt_pct(r['p_high'])} (P95 des pairs {r.get('peer_label', r['touchpoint'])})"),
             volume=int(r["failures"]),
             message=(f"« {r['rule_name']} » ({r['touchpoint']}, {r['offer']}) : Fulfillment Failures% "
                      f"{fmt_pct(r['fail_rate'])} sur {window} j (Fulfillment Failures {fmt_int(r['failures'])}, "
                      f"Fulfillment Success {fmt_int(r['success'])}). {_position(r, pct.HIGH)}."),
             details={"program": r["program"], "offer": r["offer"], "success": int(r["success"]),
-                     "failures": int(r["failures"]), "impressions": int(r["impressions"]), **pct.info(r)},
+                     "failures": int(r["failures"]), "impressions": int(r["impressions"]), **pct.info(r),
+                     "impact": f"{fmt_int(r['failures'])} clients sans leur offre",
+                     "action": "Vérifier le provisioning de l'offre côté plateforme/produit."},
         )
 
 
@@ -113,12 +124,29 @@ def impressions_without_success(ctx: RuleContext, p: dict):
             entity_type="im_rule", entity_key=str(rule_id), date=_period_start(ctx), category=r["program"],
             severity=ctx.scaled(p["severity"], r["impressions"]), metric="fulfillment_attempt_rate",
             value=round(r["attempt_rate"], 4),
-            expected="> 0" if r["mode"] == "static" else f"> {fmt_pct(r['p_low'])}", volume=int(r["impressions"]),
+            expected="> 0" if r["mode"] == "static" else f"> {fmt_pct(r['p_low'])} (P5 des pairs {r.get('peer_label', r['touchpoint'])})",
+            volume=int(r["impressions"]),
             message=(f"« {r['rule_name']} » ({r['touchpoint']}) : Impression {fmt_int(r['impressions'])}, "
                      f"Fulfillment {fmt_int(r['attempts'])} ({fmt_pct(r['attempt_rate'])}) sur {window} j. "
                      f"{_position(r, pct.LOW)}."),
             details={"program": r["program"], "offer": r["offer"], **pct.info(r)},
         )
+
+
+def _weekday_factor(s: pd.Series, evaluated: set[str], min_points: int = 14) -> pd.Series:
+    """Coefficient du jour de semaine (moyenne du jour ÷ moyenne globale), estimé hors jours évalués.
+
+    Le dimanche est structurellement plus calme : sans correction, chaque dimanche paraîtrait une chute.
+    Sans assez d'historique, coefficient 1 (pas de correction).
+    """
+    idx = pd.to_datetime(s.index)
+    ref = s[~s.index.isin(evaluated)]
+    ones = pd.Series(1.0, index=s.index)
+    if len(ref) < min_points or ref.mean() <= 0:
+        return ones
+    wd = pd.Series(ref.to_numpy(), index=pd.to_datetime(ref.index).dayofweek)
+    coef = (wd.groupby(level=0).mean() / ref.mean()).clip(lower=0.2)
+    return pd.Series([coef.get(d, 1.0) for d in idx.dayofweek], index=s.index)
 
 
 @rule("IM-IMP-02", "Chute des Impression", "im", "major", min_impressions=10000, min_rel_gap=0.30)
@@ -129,7 +157,10 @@ def impressions_drop(ctx: RuleContext, p: dict):
         daily = ctx.hist_im.groupby([dim, "date"])["impressions"].sum()
         for key, s in daily.groupby(level=0):
             s = s.droplevel(0).sort_index()
-            res = pct.history_outliers(s, pct.LOW, pc, min_rel_gap=p["min_rel_gap"])
+            factor = _weekday_factor(s, current)
+            res = pct.history_outliers(s / factor, pct.LOW, pc, min_rel_gap=p["min_rel_gap"])
+            for c in ("value", "p_low", "p50", "p_normal_high", "p_high"):  # retour à l'échelle réelle du jour
+                res[c] = res[c] * factor.reindex(res.index)
             res = res[res["p50"] >= p["min_impressions"]]
             for run in pct.runs(res, current):
                 first, last, days = run.index[0], run.index[-1], len(run)
@@ -173,20 +204,31 @@ def touchpoint_without_result(ctx: RuleContext, p: dict):
         )
 
 
-@rule("IM-DQ-03", "Last Refresh Date Time en retard", "im", "major")
+@rule("IM-DQ-03", "Last Refresh Date Time en retard", "im", "major", max_lag_hours=48)
 def stale_refresh(ctx: RuleContext, p: dict):
+    """Program Rules Active du fichier dont le dernier rafraîchissement date de plus de `max_lag_hours`.
+
+    Référence : le lendemain du fichier à 06 h GMT (les règles se rafraîchissent chaque nuit vers 03 h GMT).
+    """
     if "last_refresh" not in ctx.im:
         return
-    df = ctx.im[ctx.im.get("rule_status", "Active") == "Active"]
-    last = df.groupby("rule_id").agg(rule_name=("rule_name", "last"), refresh=("last_refresh", "max"))
-    last["refresh_date"] = pd.to_datetime(last["refresh"], errors="coerce").dt.date
-    stale = last[last["refresh_date"].notna() & (last["refresh_date"] < ctx.snapshot_date)]
-    if len(stale):
-        oldest = stale["refresh"].min()
-        yield Anomaly(
-            entity_type="dataset", entity_key="IM_refresh", date=ctx.snapshot_date.isoformat(),
-            metric="stale_rules", value=len(stale), expected="0", volume=len(stale),
-            message=(f"{len(stale)} Program Rule Active avec Last Refresh Date Time avant le {ctx.snapshot_date} "
-                     f"(min : {oldest})."),
-            details={"rules": stale["rule_name"].astype(str).head(20).tolist()},
-        )
+    df = ctx.im[ctx.im["rule_status"] == "Active"] if "rule_status" in ctx.im else ctx.im
+    last = df.groupby("rule_id").agg(rule_name=("rule_name", "last"), refresh=("last_refresh", "max"),
+                                     impressions=("impressions", "sum"))
+    refreshed = pd.to_datetime(last["refresh"].astype("string").str.replace(" GMT", "", regex=False), errors="coerce")
+    ref = pd.Timestamp(ctx.snapshot_date) + pd.Timedelta(days=1, hours=6)
+    last["lag_h"] = (ref - refreshed).dt.total_seconds() / 3600
+    stale = last[last["lag_h"] > p["max_lag_hours"]].sort_values("lag_h", ascending=False)
+    if stale.empty:
+        return
+    yield Anomaly(
+        entity_type="dataset", entity_key="IM_refresh", date=_period_start(ctx),
+        severity=ctx.scaled(p["severity"], int(stale["impressions"].sum())),
+        metric="stale_rules", value=len(stale), expected=f"rafraîchies depuis moins de {p['max_lag_hours']} h",
+        volume=int(stale["impressions"].sum()),
+        message=(f"{len(stale)} Program Rule(s) Active non rafraîchie(s) depuis plus de {p['max_lag_hours']} h "
+                 f"(la plus ancienne : {stale['refresh'].iloc[0]}, il y a {int(stale['lag_h'].iloc[0] // 24)} j), "
+                 f"{fmt_int(stale['impressions'].sum())} impressions sur le mois."),
+        details={"rule_ids": stale.index.astype(int).tolist()[:50], "rules": stale["rule_name"].astype(str).head(20).tolist(),
+                 "max_lag_hours": round(float(stale["lag_h"].iloc[0]), 1)},
+    )

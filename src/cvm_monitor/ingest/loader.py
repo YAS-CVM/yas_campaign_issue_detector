@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -18,7 +18,7 @@ MONTHS = {
     "jan": 1, "feb": 2, "fev": 2, "mar": 3, "apr": 4, "avr": 4, "may": 5, "mai": 5, "jun": 6, "jui": 6,
     "jul": 7, "aug": 8, "aou": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
-FILENAME_RE = re.compile(r"till_(\d{1,2})_([A-Za-zéû]{3,9})_(\d{4})", re.IGNORECASE)
+FILENAME_RE = re.compile(r"till_(\d{1,2})_([A-Za-zéû]{3,9})_?(\d{4})", re.IGNORECASE)
 
 
 @dataclass
@@ -28,6 +28,7 @@ class Snapshot:
     snapshot_date: date
     push: pd.DataFrame
     im: pd.DataFrame
+    columns: dict[str, list[str]] = field(default_factory=dict)  # colonnes brutes par feuille, telles que reçues
 
     @property
     def date_range(self) -> tuple[str, str]:
@@ -123,8 +124,9 @@ def clean_im(raw: pd.DataFrame) -> pd.DataFrame:
 
 def load_snapshot(path: str | Path) -> Snapshot:
     path = Path(path)
-    push = clean_push(_read_sheet(path, schema.PUSH_SHEET))
-    im = clean_im(_read_sheet(path, schema.IM_SHEET))
+    raw_push, raw_im = _read_sheet(path, schema.PUSH_SHEET), _read_sheet(path, schema.IM_SHEET)
+    columns = {schema.PUSH_SHEET: list(raw_push.columns), schema.IM_SHEET: list(raw_im.columns)}
+    push, im = clean_push(raw_push), clean_im(raw_im)
 
     snap_date = snapshot_date_from_name(path.name)
     if snap_date is None:  # repli : dernier jour présent dans les données
@@ -132,4 +134,4 @@ def load_snapshot(path: str | Path) -> Snapshot:
         snap_date = datetime.strptime(latest, "%Y-%m-%d").date()
 
     push["age_days"] = (pd.Timestamp(snap_date) - pd.to_datetime(push["date"])).dt.days.astype("int64")
-    return Snapshot(path=path, file_hash=file_sha256(path), snapshot_date=snap_date, push=push, im=im)
+    return Snapshot(path=path, file_hash=file_sha256(path), snapshot_date=snap_date, push=push, im=im, columns=columns)

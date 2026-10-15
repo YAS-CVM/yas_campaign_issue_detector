@@ -33,6 +33,39 @@ def maturity_curve(versions: pd.DataFrame, reference_age: int = 14) -> pd.DataFr
     return curve[["age_days", "completion", "broadcasts"]].sort_values("age_days").reset_index(drop=True)
 
 
+LATE_METRICS = ["conversions", "unique_conversions", "conversion_value", "fulfillment_success",
+                "fulfillment_failure", "cg_conversions"]
+
+
+def maturity_curves(versions: pd.DataFrame, metrics: list[str] | None = None,
+                    reference_age: int = 10) -> dict[str, list[float]]:
+    """Complétude par âge (0..reference_age) pour chaque métrique qui arrive en retard.
+
+    Même méthode que `maturity_curve`, métrique par métrique : on rapporte la valeur connue à chaque âge à la
+    valeur finale (mesurée à ≥ reference_age jours). Les âges jamais observés sont interpolés ; la complétude
+    ne dépasse pas 1. Renvoie {métrique: [complétude à J0, J1, …, J reference_age]}.
+    """
+    out: dict[str, list[float]] = {}
+    if versions.empty:
+        return out
+    for m in metrics or LATE_METRICS:
+        if m not in versions:
+            continue
+        v = versions[["broadcast_id", "age_days", m]].dropna()
+        final = v[v["age_days"] >= reference_age].sort_values("age_days").groupby("broadcast_id")[m].last()
+        final = final[final > 0]
+        early = v[v["broadcast_id"].isin(final.index) & (v["age_days"] < reference_age) & (v["age_days"] >= 0)].copy()
+        if early.empty:
+            continue
+        early["final"] = early["broadcast_id"].map(final)
+        g = early.groupby("age_days")[[m, "final"]].sum()
+        c = (g[m] / g["final"]).clip(upper=1.0)
+        c.loc[reference_age] = 1.0
+        full = c.reindex(range(0, reference_age + 1)).interpolate(limit_direction="both").clip(lower=0.01)
+        out[m] = [round(float(x), 4) for x in full]
+    return out
+
+
 def nowcast(push: pd.DataFrame, curve: pd.DataFrame) -> pd.DataFrame:
     """Conversions attendues à maturité pour chaque jour, via la courbe (interpolée par âge)."""
     daily = push.groupby("date").agg(conversions=("conversions", "sum"), age_days=("age_days", "max")).reset_index()
