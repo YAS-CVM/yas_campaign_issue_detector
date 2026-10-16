@@ -1,0 +1,153 @@
+{
+ "meta": {
+  "title": "CVM Issues Monitoring",
+  "author": "Équipe CVM",
+  "date": "Octobre 2026",
+  "kicker": "CVM · ISSUES MONITORING",
+  "source": "Source : CVM Issues Monitoring, rapports NEON-dx Daily Dashboard"
+ },
+ "slides": [
+  {
+   "type": "cover",
+   "title": "CVM Issues Monitoring",
+   "insight": "surveiller les campagnes CVM au quotidien",
+   "subtitle": "Objectifs et état d'avancement",
+   "date": "Octobre 2026",
+   "author": "Équipe CVM"
+  },
+  {
+   "type": "table",
+   "title": "Objectifs",
+   "insight": "repérer vite les campagnes en échec et agir avant la perte",
+   "subtitle": "Besoins fonctionnels attendus",
+   "source": "Source : cahier des besoins CVM Issues Monitoring",
+   "table": {
+    "columns": [
+     {
+      "header": "Fonctionnalité",
+      "width": 1.4,
+      "tone": "strong"
+     },
+     {
+      "header": "Besoin attendu",
+      "width": 3
+     }
+    ],
+    "rows": [
+     [
+      "Import quotidien",
+      "Lire et historiser chaque fichier NEON-dx"
+     ],
+     [
+      "Détection d'anomalies",
+      "Repérer envois bloqués, non livrés, sans conversion (≈ 25 règles)"
+     ],
+     [
+      "Alertes Teams",
+      "Prévenir l'équipe dès qu'une anomalie critique apparaît"
+     ],
+     [
+      "Tableau de bord",
+      "Explorer alertes, campagnes Push et Inbound, tendances"
+     ],
+     [
+      "Alertes e-mail",
+      "Récapitulatif quotidien aux bons destinataires"
+     ],
+     [
+      "Validation des seuils",
+      "Ajuster les règles avec les équipes CVM"
+     ],
+     [
+      "Traitement automatique",
+      "Exécution quotidienne sans action manuelle"
+     ]
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "État d'avancement",
+   "insight": "4 fonctionnalités sur 7 livrées",
+   "subtitle": "Données jusqu'au 6 octobre 2026",
+   "source": "Source : CVM Issues Monitoring",
+   "table": {
+    "columns": [
+     {
+      "header": "Fonctionnalité",
+      "width": 1.6,
+      "tone": "strong"
+     },
+     {
+      "header": "Statut",
+      "width": 0.6,
+      "align": "center"
+     },
+     {
+      "header": "Commentaire",
+      "width": 1.6,
+      "tone": "muted"
+     }
+    ],
+    "rows": [
+     [
+      "Import quotidien",
+      {
+       "text": "✓",
+       "tone": "up"
+      },
+      "32 fichiers historisés"
+     ],
+     [
+      "Détection d'anomalies",
+      {
+       "text": "✓",
+       "tone": "up"
+      },
+      "Règles actives"
+     ],
+     [
+      "Alertes Teams",
+      {
+       "text": "✓",
+       "tone": "up"
+      },
+      "Opérationnel"
+     ],
+     [
+      "Tableau de bord",
+      {
+       "text": "✓",
+       "tone": "up"
+      },
+      "4 onglets livrés"
+     ],
+     [
+      "Alertes e-mail",
+      {
+       "text": "✗",
+       "tone": "down"
+      },
+      "À activer"
+     ],
+     [
+      "Validation des seuils",
+      {
+       "text": "✗",
+       "tone": "down"
+      },
+      "À faire"
+     ],
+     [
+      "Traitement automatique",
+      {
+       "text": "✗",
+       "tone": "down"
+      },
+      "À déployer"
+     ]
+    ]
+   }
+  }
+ ]
+}
