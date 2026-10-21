@@ -122,38 +122,6 @@
         { key: 'missing_purchases', label: 'Achats manquants', num: true, fmt: F.int, bar: () => '#d9620b' } ] });
   }
 
-  // ------------------------------------------------------------------ 3. benchmarks
-  function benchmarks(el, st) {
-    const metric = st.bm || 'conv';
-    const M = { conv: ['Conv %', (s) => s.conv_rate, 'low'], dlv: ['Delivery %', (s) => s.delivery_rate, 'low'], ack: ['Ack %', (s) => s.ack_rate, 'low'], ff: ['Fulfillment Failure %', (s) => (s.fs + s.ff >= 10 ? s.ff_rate : null), 'high'] }[metric];
-    const pc = App.meta.percentiles;
-    const ok = catOk(st);
-    const idx = App.rows(P, st, [], { range: A.presets[preset(st)], where: (i) => ok(P.v('cat', i)) && !P.c.seed[i] && !App.isTechnical(P.v('bc', i)) && (metric !== 'conv' || (P.c.age[i] >= KPI.maturity && !noConv(P.v('cat', i)))) });
-    const byBc = KPI.push(P, idx, (i) => P.v('cat', i) + '|' + P.v('bc', i));
-    const groups = new Map();
-    for (const s of byBc.values()) {
-      if (s.sent < 1000) continue;
-      const v = M[1](s);
-      if (v == null) continue;
-      const [cat, bc] = s.key.split('|');
-      if (!groups.has(cat)) groups.set(cat, []);
-      groups.get(cat).push({ v, bc, label: bc, s });
-    }
-    const out = [...groups.entries()].map(([name, values]) => {
-      const sorted = values.map((p) => p.v).sort((a, b) => a - b);
-      const q = { p_low: KPI.percentile(sorted, pc.low), p50: KPI.percentile(sorted, pc.median), p_high: KPI.percentile(sorted, pc.high) };
-      for (const p of values) {
-        p.flag = values.length >= pc.min_peers && (M[2] === 'low' ? p.v <= q.p_low : p.v >= q.p_high);
-        p.tip = `<b>${esc(p.bc)}</b><div>${M[0]} ${F.pct(p.v)} · Sent ${F.compact(p.s.sent)}</div><div>${esc(name)} : P${pc.low} ${F.pct(q.p_low)} · médiane ${F.pct(q.p50)} · P${pc.high} ${F.pct(q.p_high)}</div>${values.length < pc.min_peers ? `<div>⚠ moins de ${pc.min_peers} pairs : les règles utilisent la population entière</div>` : ''}`;
-      }
-      return { name, values, q };
-    }).sort((a, b) => b.values.length - a.values.length);
-    el.innerHTML = card(`Distribution de ${M[0]} par BC, par catégorie`, '<div data-c="strip"></div>', {
-      right: `<div class="seg sm" title="Réglage de cette section uniquement">${[['conv', 'Conv %'], ['dlv', 'Delivery %'], ['ack', 'Ack %'], ['ff', 'Fulf. Failure %']].map(([k, l]) => `<button data-local="bm" data-val="${k}" class="${metric === k ? 'on' : ''}">${l}</button>`).join('')}</div>`,
-      note: `Un point par BC (≥ 1 000 envoyés, hors seeding et BC techniques${metric === 'conv' ? ', envois matures' : ''}). Bande : P${pc.low} → P${pc.high}, trait : médiane. En rouge : ${M[2] === 'low' ? `sous le P${pc.low}` : `au-dessus du P${pc.high}`}, c'est la zone où les règles percentiles alertent (avec les garde-fous d'écart minimal et de volume).` });
-    Charts.strip(el.querySelector('[data-c=strip]'), { groups: out, fmt: F.pct1, onClick: (p) => App.openDrawer('bc:' + p.bc) });
-  }
-
   // ------------------------------------------------------------------ 4. tendances
   function trends(el, st) {
     const [a, b] = A.presets[preset(st)] || App.period(st);
@@ -188,7 +156,7 @@
     const cats = [...new Set(idx.map((i) => P.v('cat', i)))].sort();
     const wk = KPI.push(P, idx, (i) => week(P.v('d', i)) + '|' + P.v('cat', i)), wkT = KPI.push(P, idx, (i) => week(P.v('d', i)));
     Charts.bars(el.querySelector('[data-c=mix]'), { x: weeks, xfmt: (w) => 'sem. ' + F.date(w), fmt: F.pct1, series: cats.map((c) => ({ name: c, color: Charts.colorOf(c), values: weeks.map((w) => (wk.get(w + '|' + c)?.sent || 0) / (wkT.get(w)?.sent || 1)) })) });
-    const WD = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+    const WD = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
     const byDay = KPI.push(P, idx, (i) => P.v('d', i)), byDayO = KPI.push(P, idx.filter((i) => !P.c.seed[i]), (i) => P.v('d', i));
     const wdv = WD.map(() => []), wdc = WD.map(() => []);
     for (const [d, s] of byDay) { const k = (new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7; wdv[k].push(s.sent); const o = byDayO.get(d); if (o) wdc[k].push(o.conv_rate_est); }
@@ -200,111 +168,21 @@
       note: (h) => { const s = byH.get(String(h)); return s ? `<br>Sent ${F.compact(s.sent)} · Conv % ${F.pct(s.conv_rate)}` : ''; } });
   }
 
-  // ------------------------------------------------------------------ 5. maturité
-  function maturity(el) {
-    const curves = App.D.curves || {};
-    const names = { conversions: 'Conversions', conversion_value: 'Valeur', fulfillment_success: 'Fulfillment Success', cg_conversions: 'CG Conversions', fulfillment_failure: 'Fulfillment Failure' };
-    const ages = [...Array(KPI.refAge + 1).keys()];
-    const lastSnap = App.snaps[App.snaps.length - 1]?.snapshot_date;
-    // Nowcast des jours récents (tous envois, toutes catégories)
-    const recent = App.range(App.addDays(lastSnap, -KPI.refAge), lastSnap).filter((d) => (P.d.d || []).includes(d));
-    const byDay = KPI.push(P, P.all.filter((i) => P.v('d', i) >= recent[0]), (i) => P.v('d', i));
-    const now = recent.map((d) => { const s = byDay.get(d); return s ? { _key: d, d, age: App.daysBetween(d, lastSnap), conv: s.conv, est: s.est.conv, comp: s.est.conv ? s.conv / s.est.conv : 1, val: s.val, estVal: s.est.val, trunc: s.trunc, n: s.n } : null; }).filter(Boolean).reverse();
-    // Envois tronqués par jour d'envoi
-    const tr = new Map();
-    for (let i = 0; i < P.n; i++) {
-      if (!P.c.frozen[i]) continue;
-      const comp = KPI.completion('conv', P.c.age[i]);
-      if (comp >= 0.99) continue;
-      const d = P.v('d', i), lost = P.c.lost[i], key = d + (lost ? '|lost' : '');
-      const s = tr.get(key) || { _key: key, d, lost, n: 0, conv: 0, est: 0, age: P.c.age[i], seen: App.snaps[P.c.snap[i]].snapshot_date, cats: new Set() };
-      s.n++; s.conv += P.c.conv[i]; s.est += P.c.conv[i] / comp; s.cats.add(P.v('cat', i));
-      tr.set(key, s);
-    }
-    const trunc = [...tr.values()];
-    el.innerHTML = `<div class="grid g2">
-      ${card('Courbes de maturité, métrique par métrique', '<div class="chart" data-c="curves"></div>', { note: `Part de la valeur finale (mesurée à J+${KPI.refAge}) déjà présente selon l'âge de l'envoi. Les métriques à 100 % dès J0 (Sent, Ack, Delivered, CG size) ne sont pas tracées. Règles de conversion appliquées à partir de J+${KPI.maturity}.` })}
-      ${card('Nowcast : conversions observées et attendues par jour d\'envoi', '<div data-g="now"></div>', { flush: true })}
-      </div>
-      ${trunc.length ? `<div style="margin-top:14px">${card(`Envois tronqués (${F.int(trunc.reduce((s, x) => s + x.n, 0))} broadcasts)`, '<div data-g="trunc"></div>', { flush: true, note: 'Envois absents des fichiers suivants avant d\'être matures. <b>Fin de mois</b> : le Daily Dashboard ne couvre que le mois en cours (prévention : demander à Flytxt d\'inclure la fin du mois précédent). <b>Disparu</b> : le broadcast a quitté les fichiers en cours de mois, perte côté NEON-dx à signaler.' })}</div>` : ''}`;
-    Charts.line(el.querySelector('[data-c=curves]'), { x: ages, xfmt: (a) => 'J+' + a, fmt: F.pct1, zeroBased: true,
-      series: Object.keys(names).filter((k) => curves[k]).map((k) => ({ name: names[k], values: curves[k] })) });
-    App.grid(el.querySelector('[data-g=now]'), { rows: now, search: false, sort: ['d', 'desc'], columns: [
-      { key: 'd', label: "Jour d'envoi", fmt: F.day }, { key: 'age', label: 'Âge', fmt: (v) => 'J+' + v },
-      { key: 'conv', label: 'Observées', num: true, fmt: F.int }, { key: 'comp', label: 'Complétude', num: true, fmt: F.pct1, bar: (r) => (r.trunc ? '#d9620b' : r.comp < 0.99 ? '#c99a00' : '#3e6cc9'), barMax: 1 },
-      { key: 'est', label: 'Attendues', num: true, fmt: (v) => '≈ ' + F.int(v) }, { key: 'estVal', label: 'Valeur attendue', num: true, fmt: F.money },
-      { key: 'trunc', label: 'État', html: (r) => (r.trunc ? '<span class="badge trunc">tronqué</span>' : r.comp < 0.99 ? '<span class="badge prov">en maturation</span>' : '<span class="badge ok">définitif</span>') }] });
-    if (trunc.length) App.grid(el.querySelector('[data-g=trunc]'), { rows: trunc, search: false, sort: ['d', 'desc'], csv: 'envois_tronques', columns: [
-      { key: 'd', label: "Jour d'envoi", fmt: F.day },
-      { key: 'lost', label: 'Cause', html: (r) => (r.lost ? `<span class="badge alert">disparu</span> <span class="small muted">après le fichier du ${F.date(r.seen)}</span>` : '<span class="badge trunc">fin de mois</span>'), csv: (r) => (r.lost ? 'disparu' : 'fin de mois') },
-      { key: 'age', label: 'Dernier âge vu', fmt: (v) => 'J+' + v }, { key: 'n', label: 'Broadcasts', num: true, fmt: F.int },
-      { key: 'conv', label: 'Conv. observées', num: true, fmt: F.int }, { key: 'est', label: 'Estimées à maturité', num: true, fmt: (v) => '≈ ' + F.int(v) },
-      { key: 'miss', label: 'Jamais remontées', num: true, sort: (r) => r.est - r.conv, html: (r) => '≈ ' + F.int(r.est - r.conv) },
-      { key: 'cats', label: 'Catégories', html: (r) => `<span class="small muted">${esc([...r.cats].join(', '))}</span>` }] });
-  }
-
-  // ------------------------------------------------------------------ 6. arrivée des données
-  function arrival(el) {
-    const snaps = App.snaps;
-    if (!snaps.length) { el.innerHTML = '<div class="empty">Aucun fichier</div>'; return; }
-    const fh = App.feed();
-    const have = new Map(snaps.map((s) => [s.snapshot_date, s]));
-    const cal = App.range(snaps[0].snapshot_date, snaps[snaps.length - 1].snapshot_date);
-    const calHtml = '<div style="display:flex;flex-wrap:wrap;gap:3px">' + cal.map((d) => `<span title="${F.day(d)} : ${have.has(d) ? 'reçu (' + esc(have.get(d).file_name) + ')' : 'aucun fichier'}" style="width:22px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;background:${have.has(d) ? '#0a2357' : '#fbe3e3'};color:${have.has(d) ? '#fff' : '#c62828'}">${d.slice(8)}</span>`).join('') + '</div>';
-    const rows = snaps.map((s, k) => ({ ...s, _key: s.id, dPush: k && snaps[k - 1].snapshot_date.slice(0, 7) === s.snapshot_date.slice(0, 7) ? s.push_rows - snaps[k - 1].push_rows : null,
-      dIm: k && snaps[k - 1].snapshot_date.slice(0, 7) === s.snapshot_date.slice(0, 7) ? s.im_rows - snaps[k - 1].im_rows : null,
-      snp: App.anomalies.filter((a) => a.rule_id.startsWith('SNP') && a.first_seen_at === s.snapshot_date).length }));
-    el.innerHTML = `<div class="grid g2">
-        ${card('Calendrier des fichiers reçus', calHtml + `<p class="small muted" style="margin:8px 0 0">${snaps.length} fichiers reçus, ${fh.missing.length} jour(s) sans fichier. Chaque fichier couvre du 1er du mois au jour indiqué.</p>`)}
-        ${card('Signaux sur le flux', fh.signals.some((x) => !x.hidden) ? `<div class="signals">${fh.signals.filter((x) => !x.hidden).map((s) => `<div class="signal"><span>${App.levelPill(s.level)}</span><span><span class="t">${esc(s.title)}</span><span class="d">${esc(s.text)}</span></span></div>`).join('')}</div>` : '<div class="empty">Aucun signal</div>')}
-      </div>
-      <!--<div style="margin-top:14px">${card('Remplissage des colonnes, fichier par fichier', '<div data-c="fill"></div>', { note: 'Part des lignes où la colonne est renseignée (non vide, non nulle). Une colonne vide aujourd\'hui peut se remplir à J+x : elle reste suivie.', right: '<span class="small muted">Push puis IM</span>' })}</div>-->
-      <!--<div style="margin-top:14px">${card("Jour d'envoi × fichier : à quel âge chaque jour a été vu", '<div data-c="age"></div>', { note: `Couleur : complétude estimée des conversions à cet âge (clair = jeune, foncé = mature). Les colonnes manquantes sont les jours sans fichier ; une ligne qui s'arrête avant J+${KPI.maturity} est tronquée.` })}</div>-->
-      <div class="card flush" style="margin-top:14px" data-g="snaps"></div>`;
-    // Matrice de remplissage
-    const fill = App.D.fill || {};
-    const fRows = [...Object.keys(fill.push || {}).map((c) => 'push|' + c), ...Object.keys(fill.im || {}).map((c) => 'im|' + c)];
-    const sDates = snaps.map((s) => s.snapshot_date);
-    Charts.heatmap(el.querySelector('[data-c=fill]'), { rows: fRows, cols: sDates.map((_, k) => k), colFmt: (k) => F.date(sDates[k]), rowFmt: (r) => (r.startsWith('push') ? 'Push · ' : 'IM · ') + r.split('|')[1],
-      value: (r, k) => { const [s, c] = r.split('|'); return fill[s]?.[c]?.[k] ?? null; },
-      color: (v) => (v === 0 ? '#fbe3e3' : Charts.seqColor(0.15 + v * 0.85)), cellText: (v) => (v === 0 ? '0' : ''),
-      title: (r, k, v) => `<b>${esc(r.replace('|', ' · '))}</b><div>Fichier du ${F.date(sDates[k])} : ${v == null ? '–' : F.pct1(v)} des lignes renseignées</div>` });
-    // Matrice âge
-    const lastDays = App.range(App.addDays(App.maxDate, -44), App.maxDate);
-    Charts.heatmap(el.querySelector('[data-c=age]'), { rows: lastDays.slice().reverse(), cols: sDates.filter((d) => d >= lastDays[0]), rowFmt: F.day, colFmt: F.date,
-      value: (d, s) => { const sn = have.get(s); return sn && d >= sn.date_min && d <= sn.date_max ? App.daysBetween(d, s) : null; },
-      color: (age) => Charts.seqColor(KPI.completion('conv', age)), cellText: (age) => (age <= 9 ? String(age) : ''),
-      title: (d, s, age) => `<b>Envois du ${F.day(d)}</b><div>${age == null ? `absents du fichier du ${F.date(s)}` : `vus à J+${age} dans le fichier du ${F.date(s)} · complétude ≈ ${F.pct1(KPI.completion('conv', age))}`}</div>` });
-    App.grid(el.querySelector('[data-g=snaps]'), { rows, sort: ['snapshot_date', 'desc'], search: false, csv: 'fichiers', columns: [
-      { key: 'snapshot_date', label: 'Fichier (till)', fmt: F.day }, { key: 'file_name', label: 'Nom', html: (r) => `<span class="small muted">${esc(r.file_name)}</span>` },
-      { key: 'ingested_at', label: 'Importé le', fmt: F.dt }, { key: 'date_min', label: 'Couverture', fmt: (v, r) => `${F.date(r.date_min)} → ${F.date(r.date_max)}` },
-      { key: 'push_rows', label: 'Lignes Push', num: true, fmt: (v, r) => `${F.int(v)}${r.dPush != null ? ` <span class="delta ${r.dPush < 0 ? 'down' : 'flat'}">${r.dPush > 0 ? '+' : ''}${F.int(r.dPush)}</span>` : ''}` },
-      { key: 'im_rows', label: 'Lignes IM', num: true, fmt: (v, r) => `${F.int(v)}${r.dIm != null ? ` <span class="delta ${r.dIm < 0 ? 'down' : 'flat'}">${r.dIm > 0 ? '+' : ''}${F.int(r.dIm)}</span>` : ''}` },
-      { key: 'snp', label: 'Révisions / disparitions', num: true, fmt: (v) => (v ? `<span class="badge trunc">${v}</span>` : '') }] });
-  }
-
   function render(el, st) {
     const p = preset(st), [a, b] = A.presets[p] || ['', ''];
     const slot = (id) => `<div data-slot="${id}"></div>`;
-    App.subtitle(`Incrémentalité, potentiel, tendances et maturité · période ${App.PRESETS[p]} : ${F.date(a)} → ${F.dateFull(b)}`);
+    App.subtitle(`Créneaux d'envoi, incrémentalité, potentiel et tendances · période ${App.PRESETS[p]} : ${F.date(a)} → ${F.dateFull(b)}`);
     el.innerHTML = `
       ${section("Quand envoyer, quoi pousser", slot('timing'), { id: 'creneaux', nav: 'Quand envoyer', sub: "Meilleurs jours et heures d'envoi (hors blackout SMS 19h-7h), BC en déclin et meilleurs BC" })}
       ${section('Incrémentalité : TG vs CG', slot('incr'), { id: 'incrementalite', nav: 'Incrémentalité', panel: true, sub: 'Test z de deux proportions sur les envois matures, hors seeding · significatif si p < 0,05', note: 'Niveau (campagnes / BC) et verdict ne concernent que cette section.' })}
       ${section("Potentiel d'amélioration", slot('pot'), { id: 'potentiel', nav: 'Potentiel', sub: 'Entités sous le P5 de leurs pairs et manque à gagner pour rejoindre la médiane' })}
-      ${section('Benchmarks', slot('bench'), { id: 'benchmarks', nav: 'Benchmarks', panel: true })}
-      ${section('Tendances · Periode-over-Periode', slot('trends'), { id: 'tendances', nav: 'Tendances' })}
-      ${section('Maturité des métriques', slot('maturity'), { id: 'maturite', nav: 'Maturité' })}`;
-
-      // ${section('Arrivée des données (flux NEON-dx)', slot('arrival'), { id: 'arrivee', nav: 'Arrivée des données' })}
+      ${section('Tendances · Periode-over-Periode', slot('trends'), { id: 'tendances', nav: 'Tendances' })}`;
     const W = (id, draw) => App.widget(el.querySelector(`[data-slot=${id}]`), id, draw);
     // Réglages locaux (niveau, verdict, métrique) fusionnés aux filtres globaux pour chaque section.
     W('timing', (w) => timing(w, st));
     W('incr', (w, g, l) => incrementality(w, { ...st, lvl: l.lvl, vd: l.vd }));
     W('pot', (w, g, l) => potential(w, { ...st, lvl: l.lvl }));
-    W('bench', (w, g, l) => benchmarks(w, { ...st, bm: l.bm }));
     W('trends', (w) => trends(w, st));
-    W('maturity', (w) => maturity(w));
-    W('arrival', (w) => arrival(w));
     if (st.sec) requestAnimationFrame(() => document.getElementById(st.sec)?.scrollIntoView({ block: 'start' }));
   }
 

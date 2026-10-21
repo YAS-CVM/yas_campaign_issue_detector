@@ -14,6 +14,12 @@ import pandas as pd
 from ..config import SEVERITIES, Config, severity_rank
 
 
+# Règles « d'état » : l'alerte décrit la situation courante d'une entité (BC, offre), pas un jour précis.
+# Identité = règle + entité, sans date : l'alerte vit tant que le phénomène dure, se résout quand il disparaît
+# et se rouvre s'il réapparaît (BC récurrents).
+STATE_RULE_PREFIX = "CVM-"
+
+
 @dataclass
 class Anomaly:
     entity_type: str          # broadcast | bc_name | campaign | category | im_rule | touchpoint | global | column
@@ -33,7 +39,8 @@ class Anomaly:
 
     @property
     def fingerprint(self) -> str:
-        raw = f"{self.rule_id}|{self.entity_type}|{self.entity_key}|{self.date}"
+        day = "" if self.rule_id.startswith(STATE_RULE_PREFIX) else self.date
+        raw = f"{self.rule_id}|{self.entity_type}|{self.entity_key}|{day}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
 
 

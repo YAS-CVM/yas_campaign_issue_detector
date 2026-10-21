@@ -19,7 +19,7 @@ from . import teams
 log = logging.getLogger(__name__)
 
 TEMPLATES = Path(__file__).parent / "templates"
-LABELS = {"critical": "Critique", "major": "Majeure", "minor": "Mineure", "info": "Info"}
+LABELS = {"critical": "Critique", "major": "Élevée", "minor": "À surveiller", "info": "Info"}
 COLORS = {
     "critical": {"bg": "#fde8e8", "fg": "#b42318"},
     "major": {"bg": "#fff1e0", "fg": "#b54708"},

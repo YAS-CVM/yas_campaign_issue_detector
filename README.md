@@ -172,10 +172,10 @@ aucune requête réseau à l'affichage. Le serveur (`cvm-monitor serve`) ne sert
 
 | Onglet | Question | Contenu |
 |---|---|---|
-| **Push Campaigns** | Nos envois partent-ils, arrivent-ils, convertissent-ils ? | Jour J vs 7 j et même jour de semaine, exécution au dernier fichier et transitions de statut, entonnoir, séries, carte de chaleur catégorie × jour, explorateur Campagne → BC → Broadcast, historique des versions d'un broadcast |
+| **Alertes** | Que traiter et prévenir aujourd'hui ? | État des alertes, listes d'alertes par périmètre (acquitter / sourdine / rouvrir), catalogue des règles, journal des notifications |
+| **Analytics** | Qu'est-ce que ça rapporte, quand et quoi envoyer, où agir ? | Quand envoyer (meilleurs jours / heures hors blackout, BC en déclin), uplift TG vs CG (forest plot), potentiel d'amélioration, tendances |
+| **Push Campaigns** | Nos envois partent-ils, arrivent-ils, convertissent-ils ? | Jour J vs 7 j et même jour de semaine, entonnoir, séries, carte de chaleur catégorie × jour, explorateur Campagne → BC → Broadcast, historique des versions d'un broadcast |
 | **Inbound Marketing** | Les offres présentées sont-elles achetées ? Les données IM sont-elles à jour ? | Jour J, touchpoints, programmes, règles IM (en échec, sans achat, non rafraîchies, nouvelles / disparues), offres |
-| **Analytics** | Qu'est-ce que ça rapporte, où agir, peut-on se fier aux chiffres ? | Uplift TG vs CG (forest plot), potentiel d'amélioration, distributions et seuils P5 / P50 / P95, tendances, maturité par métrique, arrivée des données NEON-dx |
-| **Alertes** | Que traiter et prévenir aujourd'hui ? | Santé du flux NEON-dx, file de traitement (acquitter / sourdine / rouvrir), tendance, catalogue des règles, journal des notifications |
 | ⚙ Paramètres | | Import d'un fichier, canaux Teams / e-mail et test, fichiers reçus |
 
 **Filtres de la page et filtres de carte.**

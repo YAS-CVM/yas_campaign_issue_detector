@@ -48,8 +48,7 @@ def test_format_change_columns_new_values_and_fill(cfg):
         {"snapshot_id": 1, "sheet": "im", "column": "declined", "fill": 0.0},
         {"snapshot_id": 2, "sheet": "im", "column": "declined", "fill": 0.2},
     ])
-    cfg.raw["rules"]["FEED-02"].pop("max_severity")
-    cfg.raw["rules"]["FEED-02"]["severity"] = "major"  # config livrée : consultation seule
+    cfg.raw["rules"]["FEED-02"]["severity"] = "major"
     found = {a.entity_key: a for a in run_one(ctx, "FEED-02")}
     assert found["Data_Push · colonnes"].details == {"added": ["C"], "removed": ["B"]}
     assert "Status = Targeting" in found

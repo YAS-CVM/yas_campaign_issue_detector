@@ -125,7 +125,5 @@ def test_delivery_drop_collapses_consecutive_days_into_one_episode(cfg):
     found = run_one(make_ctx(cfg, push=push), "PM-DLV-02")
     cats = [a for a in found if a.entity_key == "CVM"]
     assert len(cats) == 1 and cats[0].date == days[14] and len(cats[0].details["days"]) == 3
-    assert cats[0].severity == "info"  # règle de flux : consultation seule dans la config livrée
-    cfg.raw["rules"]["PM-DLV-02"].pop("max_severity")
     cfg.raw["rules"]["PM-DLV-02"]["severity"] = "major"
     assert run_one(make_ctx(cfg, push=push), "PM-DLV-02")[0].severity in ("major", "critical")

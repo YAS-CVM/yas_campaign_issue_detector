@@ -65,5 +65,6 @@ def test_in_blackout_window(cfg):
 
 def test_demoted_rules_are_info_only(cfg):
     push = make_push([{"status": "Paused"}])
+    cfg.raw["rules"]["PM-EXE-03"] = {"enabled": True, "severity": "major", "max_severity": "info", "min_days": 1}
     found = run_one(make_ctx(cfg, push), "PM-EXE-03")
-    assert found and all(a.severity == "info" for a in found)
+    assert found and all(a.severity == "info" for a in found)  # max_severity plafonne la sévérité

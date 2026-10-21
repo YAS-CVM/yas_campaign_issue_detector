@@ -46,48 +46,65 @@ detection:
     fallback_to_static: true
 
 rules:
-  # Alertes notifiées (actionnables business) : sévérité normale.
-  # Les autres règles sont plafonnées à `info` (max_severity) : visibles dans le site, jamais notifiées.
-  # ---- Business : ce qui ne convertit plus ----
-  BIZ-CONV-01: {enabled: true, severity: major, min_sent: 1000, min_rel_gap: 0.4, min_lost: 50, major_lost: 500, critical_lost: 5000}  # BC : Conv% < P5 de son historique
-  BIZ-OFR-01: {enabled: true, severity: major, min_impressions: 1000, min_rel_gap: 0.4, min_lost: 50, major_lost: 500, critical_lost: 5000}  # offre IM : taux d'achat < P5 de son historique
-  PM-PRF-02: {enabled: true, severity: major, min_cg: 1000, min_cg_conversions: 30, p_value: 0.05, major_lost: 500}  # uplift négatif significatif
-  PM-PRF-03: {enabled: true, severity: major, min_failures: 10, max_failure_rate: 0.20, min_abs_gap: 0.05}  # offre non livrée (Push)
-  IM-FUL-01: {enabled: true, severity: major, min_attempts: 500, max_failure_rate: 0.50, critical_failure_rate: 0.90, min_abs_gap: 0.10}  # offre non livrée (IM)
+  # 16 règles actives : CVM Push 9, CVM Inbound 5, Flux 2.
+  # Les autres sont désactivées (enabled: false) : le code est conservé, réactivation en une ligne.
+  # ---- Règles CVM (14) : Push par BC, Inbound par offre. Elles remplacent les règles ci-dessous passées à enabled: false ----
+  CVM-PUSH-01: {enabled: true, severity: critical, last_n: 3, min_conversions: 10, min_sent: 1000, recent_days: 14}  # Ne convertit plus
+  CVM-PUSH-02: {enabled: true, severity: major, last_n: 3, recent_days: 14}                                          # Ciblage à zéro
+  CVM-PUSH-03: {enabled: true, severity: major, days: 3, min_generated: 0}                                           # Envoi en échec
+  CVM-PUSH-04: {enabled: true, severity: major, last_n: 3, prev_n: 6, min_drop_pct: 40, min_conversions: 30, min_sent: 1000, recent_days: 14}  # Taux de conversion en baisse
+  CVM-PUSH-05: {enabled: true, severity: major, last_n: 3, prev_n: 6, min_drop_pct: 15, min_sent: 5000, recent_days: 14}  # Livraison en baisse (hors variation plateforme)
+  CVM-PUSH-06: {enabled: true, severity: major, last_n: 3, min_sends: 3, min_sent: 1000, recent_days: 14}            # Plus aucune livraison remontée
+  CVM-PUSH-07: {enabled: true, severity: minor, min_sends: 5, min_sent: 10000, recent_days: 14}                      # Aucune conversion enregistrée
+  CVM-PUSH-08: {enabled: true, severity: minor, last_n: 5, min_cg: 1000, min_conversions: 10, recent_days: 14}       # Pas mieux que le groupe de contrôle
+  CVM-PUSH-09: {enabled: true, severity: info, min_active_days: 5, window_days: 14, silent_days: 3, stopped_within_days: 30}  # N'envoie plus
+  CVM-INB-01: {enabled: true, severity: critical, days: 7, min_impressions: 1000, critical_expected: 20}             # Plus aucun achat (minor sous critical_expected)
+  CVM-INB-02: {enabled: true, severity: major, days: 7, min_fail_pct: 20, critical_pct: 50, min_attempts: 100}       # Échecs d'achat élevés
+  CVM-INB-03: {enabled: true, severity: major, days: 3, prev_days: 7, min_drop_pct: 50, min_prev: 30}                # Achats en baisse
+  CVM-INB-04: {enabled: true, severity: minor, min_impressions: 5000, recent_days: 7}                                # Jamais achetée
+  CVM-INB-05: {enabled: true, severity: major, silent_days: 7, max_silent_days: 30}                                  # N'est plus affichée
+  # ---- Anciennes règles (remplacées par les CVM-*, conservées désactivées) ----
+  BIZ-CONV-01: {enabled: false, min_sent: 1000, min_rel_gap: 0.4, min_lost: 50, major_lost: 500, critical_lost: 5000}  # BC : Conv% < P5 de son historique
+  BIZ-OFR-01: {enabled: false, min_impressions: 1000, min_rel_gap: 0.4, min_lost: 50, major_lost: 500, critical_lost: 5000}  # offre IM : taux d'achat < P5 de son historique
+  PM-PRF-02: {enabled: false, min_cg: 1000, min_cg_conversions: 30, p_value: 0.05, major_lost: 500}  # uplift négatif significatif
+  PM-PRF-03: {enabled: false, min_failures: 10, max_failure_rate: 0.20, min_abs_gap: 0.05}  # offre non livrée (Push)
+  IM-FUL-01: {enabled: false, min_attempts: 500, max_failure_rate: 0.50, critical_failure_rate: 0.90, min_abs_gap: 0.10}  # offre non livrée (IM)
   # ---- Exécution : seulement les arrêts à gros volume, hors blackout ----
-  PM-EXE-01: {enabled: true, severity: critical, min_generated: 50000}     # bloqué en Delivering
-  PM-EXE-02: {enabled: true, severity: major, min_volume: 50000}           # Aborted / Delivery Stalled (hors fenêtre blackout)
+  PM-EXE-01: {enabled: false, min_generated: 50000}     # bloqué en Delivering
+  PM-EXE-02: {enabled: false, min_volume: 50000}           # Aborted / Delivery Stalled (hors fenêtre blackout)
   # ---- Flux NEON-dx : le fichier du jour ----
   FEED-01: {enabled: true, severity: major, month_end_days: 3}             # fichier manquant
-  # ---- Consultation seule (info) ----
-  PM-EXE-03: {enabled: true, severity: info, max_severity: info, min_days: 1}   # en pause
-  PM-EXE-04: {enabled: true, severity: info, max_severity: info}                # blackout : attendu
-  PM-EXE-05: {enabled: true, severity: info, max_severity: info, min_generated: 1000}  # ciblé mais non envoyé
-  PM-EXE-06: {enabled: true, severity: info, max_severity: info, min_generated: 1000, max_sent_ratio: 0.01}  # blackout expiré : attendu
-  PM-EXE-07: {enabled: true, severity: info, max_severity: info, min_days: 1}   # statut transitoire
-  PM-DLV-01: {enabled: true, severity: info, max_severity: info, min_sent: 100, min_abs_gap: 0.05}
-  PM-DLV-02: {enabled: true, severity: info, max_severity: info, min_sent: 10000, min_abs_gap: 0.10}
-  PM-DLV-03: {enabled: true, severity: info, max_severity: info, min_sent: 1000, max_ack_rate: 0.90, min_abs_gap: 0.05}
-  PM-PRF-01: {enabled: true, severity: info, max_severity: info, min_sent: 1000, min_abs_gap: 0.002}  # remplacée par BIZ-CONV-01
-  PM-DQ-01: {enabled: true, severity: info, max_severity: info}
-  PM-DQ-02: {enabled: true, severity: info, max_severity: info}
-  PM-DQ-03: {enabled: true, severity: info, max_severity: info}
-  PM-DQ-04: {enabled: true, severity: info, max_severity: info, min_sent: 1000}
-  PM-DQ-05: {enabled: true, severity: info, max_severity: info}
-  PM-DQ-06: {enabled: true, severity: info, max_severity: info}
-  IM-FUL-02: {enabled: true, severity: info, max_severity: info, min_attempts: 5000, min_abs_gap: 0.02}
-  IM-IMP-01: {enabled: true, severity: info, max_severity: info, min_impressions: 1000, min_abs_gap: 0.05}  # remplacée par BIZ-OFR-01
-  IM-IMP-02: {enabled: true, severity: info, max_severity: info, min_impressions: 10000, min_rel_gap: 0.30}
-  IM-DQ-01: {enabled: true, severity: info, max_severity: info, max_ratio: 0.01}
-  IM-DQ-02: {enabled: true, severity: info, max_severity: info, min_impressions: 1000}
-  IM-DQ-03: {enabled: true, severity: info, max_severity: info, max_lag_hours: 48}
-  SNP-01: {enabled: true, severity: info, max_severity: info}
-  SNP-02: {enabled: true, severity: info, max_severity: info}
-  SNP-03: {enabled: true, severity: info, max_severity: info}
-  FEED-02: {enabled: true, severity: info, max_severity: info}
+  # ---- Inbound : portée et échecs d'offre ----
+  # (IM-FUL-02, IM-IMP-02 ci-dessous)
+  # ---- Désactivées ----
+  PM-EXE-03: {enabled: false, min_days: 1}   # en pause
+  PM-EXE-04: {enabled: false}                # blackout : attendu
+  PM-EXE-05: {enabled: false, min_generated: 1000}  # ciblé mais non envoyé
+  PM-EXE-06: {enabled: false, min_generated: 1000, max_sent_ratio: 0.01}  # blackout expiré : attendu
+  PM-EXE-07: {enabled: false, min_days: 1}   # statut transitoire
+  PM-DLV-01: {enabled: false, min_sent: 100, min_abs_gap: 0.05}
+  PM-DLV-02: {enabled: false, min_sent: 10000, min_abs_gap: 0.10}
+  PM-DLV-03: {enabled: false, min_sent: 1000, max_ack_rate: 0.90, min_abs_gap: 0.05}
+  PM-PRF-01: {enabled: false, min_sent: 1000, min_abs_gap: 0.002}  # remplacée par BIZ-CONV-01
+  PM-DQ-01: {enabled: false}
+  PM-DQ-02: {enabled: false}
+  PM-DQ-03: {enabled: false}
+  PM-DQ-04: {enabled: false, min_sent: 1000}
+  PM-DQ-05: {enabled: false}
+  PM-DQ-06: {enabled: false}
+  IM-FUL-02: {enabled: false, min_attempts: 5000, min_abs_gap: 0.02}
+  IM-IMP-01: {enabled: false, min_impressions: 1000, min_abs_gap: 0.05}  # remplacée par BIZ-OFR-01
+  IM-IMP-02: {enabled: false, min_impressions: 10000, min_rel_gap: 0.30}
+  IM-DQ-01: {enabled: false, max_ratio: 0.01}
+  IM-DQ-02: {enabled: false, min_impressions: 1000}
+  IM-DQ-03: {enabled: false, max_lag_hours: 48}
+  SNP-01: {enabled: false}
+  SNP-02: {enabled: false}
+  SNP-03: {enabled: false}
+  FEED-02: {enabled: false}
   FEED-03: {enabled: true, severity: major, min_volume: 1000, drop_ratio: 0.5, min_fill: 0.05}  # métrique clé à 0 alors qu'il y a du volume
-  FEED-04: {enabled: true, severity: info, max_severity: info}
-  FEED-06: {enabled: true, severity: info, max_severity: info, min_conversions: 1000, min_expected_growth: 0.15, max_ratio: 0.4}
+  FEED-04: {enabled: false}
+  FEED-06: {enabled: false, min_conversions: 1000, min_expected_growth: 0.15, max_ratio: 0.4}
 
 feed:
   # Le Daily Dashboard « till J-1 » est attendu chaque jour avant cette heure ; sinon alerte (une fois par fichier).

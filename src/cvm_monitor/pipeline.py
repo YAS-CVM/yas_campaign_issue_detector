@@ -12,6 +12,7 @@ import pandas as pd
 
 from .config import Config
 from .detect.base import RuleContext
+from .detect.base import REGISTRY
 from .detect.engine import run_rules
 from .ingest.loader import file_sha256, load_snapshot
 from .storage import repository as repo
@@ -84,6 +85,8 @@ def detect_snapshot(cfg: Config, conn, snapshot) -> tuple[list, set[str], dict[s
     ctx = build_context(cfg, conn, snapshot)
     anomalies, executed, errors = run_rules(ctx)
     sync = repo.sync_anomalies(conn, snapshot, anomalies, executed)
+    disabled = [r for r in REGISTRY if not cfg.rule(r).get("enabled", True)]
+    sync.resolved += repo.resolve_rules(conn, disabled, snapshot["snapshot_date"])  # règle désactivée : plus de fantômes ouverts
     conn.commit()
     return anomalies, executed, errors, sync
 

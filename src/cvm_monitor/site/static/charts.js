@@ -303,37 +303,5 @@ const Charts = (() => {
     });
   }
 
-  /** Distribution : un point par entité, repères P5 / P50 / P95 par groupe. opt = { groups: [{name, values: [{v, label, flag}], q: {p_low, p50, p_high}}], fmt } */
-  function strip(el, opt) {
-    const groups = opt.groups.filter((g) => g.values.length);
-    if (!groups.length) { el.innerHTML = '<div class="empty">Aucune donnée</div>'; return; }
-    const W = width(el), rh = 28, m = { l: 170, r: 16, t: 6, b: 22 }, H = m.t + m.b + groups.length * rh;
-    const all = groups.flatMap((g) => g.values.map((p) => p.v)), lo = Math.min(0, ...all), hi = Math.max(...all) || 1;
-    const X = (v) => m.l + ((v - lo) / (hi - lo || 1)) * (W - m.l - m.r);
-    let s = '';
-    for (const v of ticks(lo, hi, 5)) s += `<line x1="${X(v)}" x2="${X(v)}" y1="${m.t}" y2="${H - m.b}" stroke="${LINE}"/><text x="${X(v)}" y="${H - 6}" text-anchor="middle">${esc(opt.fmt(v))}</text>`;
-    const pts = [];
-    groups.forEach((g, gi) => {
-      const y = m.t + gi * rh + rh / 2;
-      s += `<text x="${m.l - 8}" y="${y + 4}" text-anchor="end">${esc(g.name)} <tspan class="faint">(${g.values.length})</tspan></text>`;
-      if (g.q) {
-        s += `<rect x="${X(g.q.p_low)}" y="${y - 7}" width="${Math.max(1, X(g.q.p_high) - X(g.q.p_low))}" height="14" fill="#e7eef6" rx="3"/>`;
-        s += `<line x1="${X(g.q.p50)}" x2="${X(g.q.p50)}" y1="${y - 9}" y2="${y + 9}" stroke="#00377d" stroke-width="2"/>`;
-      }
-      g.values.forEach((p, k) => {
-        const jitter = ((k * 7919) % 11 - 5) * 0.9;
-        pts.push(p);
-        s += `<circle data-i="${pts.length - 1}" cx="${X(p.v).toFixed(1)}" cy="${(y + jitter).toFixed(1)}" r="${p.flag ? 3.6 : 2.6}" fill="${p.flag ? '#c0392b' : '#2a78d6'}" fill-opacity="${p.flag ? .95 : .5}"/>`;
-      });
-    });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="height:${H}px">${s}</svg>`;
-    el.querySelectorAll('circle').forEach((c) => {
-      const p = pts[+c.dataset.i];
-      c.addEventListener('mousemove', (ev) => tip(p.tip || esc(p.label), ev));
-      c.addEventListener('mouseleave', untip);
-      if (opt.onClick) { c.style.cursor = 'pointer'; c.addEventListener('click', () => opt.onClick(p)); }
-    });
-  }
-
-  return { line, bars, hbars, spark, heatmap, scatter, forest, strip, seqColor, divColor, colorOf, seed, fix, tip, untip, PALETTE };
+  return { line, bars, hbars, spark, heatmap, scatter, forest, seqColor, divColor, colorOf, seed, fix, tip, untip, PALETTE };
 })();

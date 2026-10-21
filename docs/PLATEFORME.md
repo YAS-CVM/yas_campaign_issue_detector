@@ -261,18 +261,27 @@ Ne sont évalués que les envois matures. Le seeding est exclu par défaut.
 
 ## 7.0 Alertes business : le jeu notifié
 
-Seules les règles « actionnables » alertent (mail / Teams). Question test : *quelqu'un doit-il agir aujourd'hui pour protéger des conversions ou du revenu ?*
+**16 règles actives** : 14 règles CVM (Push 9 par BC, Inbound 5 par offre) et 2 règles de flux ; toutes alertent (mail / Teams). Question test : *quelqu'un doit-il agir aujourd'hui pour protéger des conversions ou du revenu ?* Sévérités : Critique, Élevée, À surveiller, Info. Les seuils sont dans `config.yaml` (`rules.CVM-*`) ; le code est dans `detect/rules_cvm.py`.
 
-| Règle | Alerte |
-|---|---|
-| BIZ-CONV-01 | un BC convertit moins que sa propre normale (P5 des 28 jours précédents), chiffré en conversions et valeur perdues |
-| BIZ-OFR-01 | une offre Inbound a un taux d'achat sous sa propre normale, chiffré en achats perdus |
-| PM-PRF-02 | uplift négatif significatif (major si ≥ 500 conversions perdues) |
-| PM-PRF-03, IM-FUL-01 | offre non livrée (échecs de fulfillment) |
-| PM-EXE-01, PM-EXE-02 | broadcast à gros volume bloqué ou arrêté, hors blackout |
-| FEED-01, FEED-03 | fichier du jour absent, métrique clé à 0 |
+| Règle | Sévérité | Alerte |
+|---|---|---|
+| CVM-PUSH-01 Ne convertit plus | Critique | le BC avait converti, mais ses derniers envois n'ont aucune conversion |
+| CVM-PUSH-02 Ciblage à zéro | Élevée | les derniers envois n'ont ciblé aucun client (Sent = 0) |
+| CVM-PUSH-03 Envoi en échec | Élevée | dernier envoi Aborted, Delivery Stalled ou Blackout Expired |
+| CVM-PUSH-04 Taux de conversion en baisse | Élevée | taux des derniers envois inférieur d'au moins X % aux précédents |
+| CVM-PUSH-05 Livraison en baisse | Élevée | Delivery% en baisse, variation de la plateforme retirée |
+| CVM-PUSH-06 Plus aucune livraison remontée | Élevée | livraison mesurée avant, plus aucun délivré sur les derniers envois |
+| CVM-PUSH-07 Aucune conversion enregistrée | À surveiller | BC active sans aucune conversion depuis le début des rapports |
+| CVM-PUSH-08 Pas mieux que le groupe de contrôle | À surveiller | taux des ciblés ≤ taux du GC |
+| CVM-PUSH-09 N'envoie plus | Info | BC régulière silencieuse depuis N jours |
+| CVM-INB-01 Plus aucun achat | Critique / À surveiller | offre déjà achetée, aucun achat récent ; critique si beaucoup d'achats étaient attendus |
+| CVM-INB-02 Échecs d'achat élevés | Élevée / Critique | part des Fulfillment Failures trop haute |
+| CVM-INB-03 Achats en baisse | Élevée | achats/jour sous ceux des 7 jours précédents |
+| CVM-INB-04 Jamais achetée | À surveiller | offre affichée sans aucun achat réussi |
+| CVM-INB-05 N'est plus affichée | Élevée | offre qui marchait, plus d'impression (règle par règle, hors « Completed ») |
+| FEED-01, FEED-03 | Élevée | fichier du jour absent, métrique clé à 0 |
 
-Toutes les autres règles sont plafonnées à `info` (`max_severity: info` dans `config.yaml`) : visibles dans l'onglet Alertes, jamais notifiées. Aucune donnée n'est masquée.
+Les règles CVM remplacent BIZ-CONV-01, BIZ-OFR-01, PM-PRF-02/03, PM-EXE-01/02, IM-FUL-01/02 et IM-IMP-02, désormais désactivées. Les autres règles (PM-EXE-03..07, PM-DLV-*, PM-PRF-01, PM-DQ-*, IM-IMP-01, IM-DQ-*, SNP-*, FEED-02/04/06) le restent (`enabled: false` dans `config.yaml`) : le code est conservé, on les réactive en une ligne. Leurs anomalies encore ouvertes sont résolues au prochain traitement. Aucune donnée source n'est supprimée.
 
 **Blackout SMS** (`detection.sms_blackout`, 19h-07h) : réglementaire, donc normal. Un arrêt dans cette fenêtre n'alerte pas (`RuleContext.in_blackout`), et les heures de blackout sont exclues du classement des heures d'envoi. Minuit pile = flow déclenché, jamais considéré comme blackout.
 
@@ -466,10 +475,10 @@ maturité) sont pré-calculées en Python pour les périodes 7 j, 30 j, mois en 
 
 | Onglet | Ce qu'on y voit | Question à laquelle il répond |
 |---|---|---|
-| **Push Campaigns** | Jour J (écart vs 7 j et vs même jour de semaine), exécution au dernier fichier et transitions de statut, entonnoir, séries, carte de chaleur, top des BC (volume, base par envoi, fréquence ; BC techniques exclus par défaut), explorateur Campagne → BC → Broadcast, versions successives d'un broadcast | « Nos envois partent-ils, arrivent-ils, convertissent-ils ? » |
+| **Alertes** | État des alertes, listes d'alertes par périmètre (Push, Inbound, Flux…) avec acquittement, catalogue des règles, notifications | « Que dois-je traiter et prévenir aujourd'hui ? » |
+| **Analytics** | Quand envoyer (jours, heures, créneaux, BC en déclin), incrémentalité (uplift, IC 95 %, verdict), potentiel d'amélioration, tendances | « Qu'est-ce que ça rapporte, quand et quoi envoyer, où agir ? » |
+| **Push Campaigns** | Jour J (écart vs 7 j et vs même jour de semaine), entonnoir, séries, carte de chaleur, top des BC (volume, base par envoi, fréquence ; BC techniques exclus par défaut), explorateur Campagne → BC → Broadcast, versions successives d'un broadcast | « Nos envois partent-ils, arrivent-ils, convertissent-ils ? » |
 | **Inbound Marketing** | Jour J, touchpoints, programmes, règles IM et leur fraîcheur, offres | « Les offres présentées sont-elles achetées, les données sont-elles à jour ? » |
-| **Analytics** | Incrémentalité (uplift, IC 95 %, verdict), potentiel d'amélioration, distributions et seuils, tendances, maturité par métrique, arrivée des données | « Qu'est-ce que ça rapporte, où agir, peut-on se fier aux chiffres ? » |
-| **Alertes** | Santé du flux NEON-dx, file de traitement avec acquittement, tendance, catalogue, notifications | « Que dois-je traiter et prévenir aujourd'hui ? » |
 
 ### 12.1 Complétude d'un chiffre
 
@@ -487,7 +496,7 @@ groupe de contrôle arrivent sur trois à quatre jours.
 
 ### 12.2 Santé du flux NEON-dx
 
-Bandeau de l'onglet Alertes et pastille de l'en-tête. Signaux calculés sur les fichiers reçus : fraîcheur du
+Pastille de l'en-tête (la card « Santé du flux » de l'onglet Alertes a été retirée ; les alertes FEED-* et SNP-* restent dans leurs listes par périmètre). Signaux calculés sur les fichiers reçus : fraîcheur du
 dernier fichier, fichiers manquants, lignes en baisse d'un fichier au suivant dans un même mois, broadcasts disparus,
 envois tronqués en fin de mois, colonnes dont le remplissage change (une colonne vide est suivie : elle peut se
 remplir à J+x), jours IM sans fulfillment, touchpoint sans fulfillment.

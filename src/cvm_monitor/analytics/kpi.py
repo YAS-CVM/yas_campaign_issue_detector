@@ -58,6 +58,9 @@ def campaign_scorecard(df: pd.DataFrame, key: str = "campaign_name", maturity_da
     """Uplift par campagne / BC sur les envois matures, avec significativité."""
     mature = df[(df["age_days"] >= maturity_days) & (df["sent"] > 0)] if "age_days" in df else df
     agg = push_by(mature, [key, "category"])
+    if agg.empty:  # aucun envoi mature : mêmes colonnes que le cas normal (apply(axis=1) renverrait un DataFrame)
+        return agg.assign(uplift=None, ci_low=None, ci_high=None, p_value=None, significant=False,
+                          incremental_conversions=None, verdict=None)
     rows = []
     for r in agg.itertuples(index=False):
         res = two_proportion_test(getattr(r, "unique_conversions"), r.sent, r.cg_conversions, r.cg_size)

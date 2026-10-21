@@ -33,7 +33,7 @@ def _first(g: pd.DataFrame, col: str):
 
 # --------------------------------------------------------------------------- exécution
 
-@rule("PM-EXE-01", "Status Delivering bloqué", "push", "critical", min_generated=1000)
+@rule("PM-EXE-01", "Envoi bloqué en Delivering", "push", "critical", min_generated=1000)
 def stuck_delivering(ctx: RuleContext, p: dict):
     df = ctx.push
     df = df[(df["status"] == "Delivering") & (df["age_days"] >= 1) & (df["generated"] >= p["min_generated"])]
@@ -53,7 +53,7 @@ def stuck_delivering(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-EXE-02", "Status Aborted / Delivery Stalled", "push", "major", min_volume=0)
+@rule("PM-EXE-02", "Envoi interrompu (Aborted / Delivery Stalled)", "push", "major", min_volume=0)
 def aborted(ctx: RuleContext, p: dict):
     """Arrêt anormal d'un broadcast à fort volume ; un arrêt dans la fenêtre de blackout SMS est attendu."""
     df = ctx.push[ctx.push["status"].isin(["Aborted", "Delivery Stalled"])]
@@ -73,7 +73,7 @@ def aborted(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-EXE-03", "Status Paused", "push", "major", min_days=1)
+@rule("PM-EXE-03", "Envoi en pause", "push", "major", min_days=1)
 def paused(ctx: RuleContext, p: dict):
     df = ctx.push[ctx.push["status"] == "Paused"]
     for bc, g, first, last, days in _episodes_by_bc(df):
@@ -90,7 +90,7 @@ def paused(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-EXE-04", "Status Blackout", "push", "minor", max_severity="major")
+@rule("PM-EXE-04", "Envoi en blackout", "push", "minor", max_severity="major")
 def blackout(ctx: RuleContext, p: dict):
     df = ctx.push[ctx.push["status"].isin(["Blackout Pause", "Blackout Expired"])]
     for r in df.itertuples():
@@ -111,7 +111,7 @@ def blackout(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-EXE-05", "Generated sans Sent", "push", "major", min_generated=1000)
+@rule("PM-EXE-05", "Ciblé mais non envoyé", "push", "major", min_generated=1000)
 def generated_not_sent(ctx: RuleContext, p: dict):
     df = ctx.push
     df = df[(df["generated"] >= p["min_generated"]) & (df["sent"] == 0) & ~df["status"].isin(HANDLED_ELSEWHERE)]
@@ -129,7 +129,7 @@ def generated_not_sent(ctx: RuleContext, p: dict):
 KNOWN_STATUSES = {"Completed", "Delivering", "Paused", "Aborted", "Delivery Stalled", "Blackout Pause", "Blackout Expired"}
 
 
-@rule("PM-EXE-06", "Blackout expiré : volume jamais envoyé", "push", "major", min_generated=1000, max_sent_ratio=0.01)
+@rule("PM-EXE-06", "Blackout expiré : volume non envoyé", "push", "major", min_generated=1000, max_sent_ratio=0.01)
 def blackout_expired_unsent(ctx: RuleContext, p: dict):
     """La fenêtre de blackout a expiré avant l'envoi : le volume ciblé n'est jamais parti."""
     df = ctx.push[(ctx.push["status"] == "Blackout Expired") & (ctx.push["generated"] >= p["min_generated"])]
@@ -192,7 +192,7 @@ def _position(r, direction: str) -> str:
     return "seuil fixe" if r["mode"] == "static" else pct.describe(r, direction, fmt_pct)
 
 
-@rule("PM-DLV-01", "Delivery% anormalement bas", "push", "major", min_sent=100, min_abs_gap=0.05)
+@rule("PM-DLV-01", "Livraison anormalement basse", "push", "major", min_sent=100, min_abs_gap=0.05)
 def zero_delivery(ctx: RuleContext, p: dict):
     df = ctx.business(ctx.push)
     df = df[(df["sent"] >= p["min_sent"]) & (df["status"] != "Delivering")]
@@ -232,7 +232,7 @@ def zero_delivery(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-DLV-02", "Chute du Delivery%", "push", "major", min_sent=10000, min_abs_gap=0.10)
+@rule("PM-DLV-02", "Chute de la livraison", "push", "major", min_sent=10000, min_abs_gap=0.10)
 def delivery_drop(ctx: RuleContext, p: dict):
     pc = pct.settings(ctx.det)
     hist = ctx.business(ctx.hist_push)
@@ -269,7 +269,7 @@ def delivery_drop(ctx: RuleContext, p: dict):
             )
 
 
-@rule("PM-DLV-03", "Acknowledged % faible", "push", "minor", min_sent=1000, max_ack_rate=0.90, min_abs_gap=0.05)
+@rule("PM-DLV-03", "Accusés de réception faibles", "push", "minor", min_sent=1000, max_ack_rate=0.90, min_abs_gap=0.05)
 def low_ack(ctx: RuleContext, p: dict):
     df = ctx.business(ctx.push)
     df = df[df["sent"] >= p["min_sent"]]
@@ -300,7 +300,7 @@ def _mature(ctx: RuleContext) -> pd.DataFrame:
     return df[(df["age_days"] >= ctx.det.get("maturity_days", 3)) & (df["sent"] > 0)]
 
 
-@rule("PM-PRF-01", "Conversion% anormalement basse", "push", "minor", min_sent=1000, min_abs_gap=0.002)
+@rule("PM-PRF-01", "Conversion anormalement basse", "push", "minor", min_sent=1000, min_abs_gap=0.002)
 def no_conversion(ctx: RuleContext, p: dict):
     df = _mature(ctx)
     if df.empty:
@@ -325,7 +325,7 @@ def no_conversion(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-PRF-02", "% Net Conversion négatif", "push", "minor", min_cg=1000, min_cg_conversions=30, p_value=0.05,
+@rule("PM-PRF-02", "Pire que le groupe de contrôle (uplift négatif)", "push", "minor", min_cg=1000, min_cg_conversions=30, p_value=0.05,
       major_lost=500)
 def negative_uplift(ctx: RuleContext, p: dict):
     df = _mature(ctx)
@@ -352,7 +352,7 @@ def negative_uplift(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-PRF-03", "Fulfillment Failure% anormalement haut (Push)", "push", "major",
+@rule("PM-PRF-03", "Échecs de fulfillment anormalement élevés", "push", "major",
       min_failures=10, max_failure_rate=0.20, min_abs_gap=0.05)
 def push_fulfillment_failure(ctx: RuleContext, p: dict):
     if ctx.push.empty:
@@ -385,7 +385,7 @@ def push_fulfillment_failure(ctx: RuleContext, p: dict):
 
 # --------------------------------------------------------------------------- qualité de données
 
-@rule("PM-DQ-01", "Sent > Generated", "push", "minor")
+@rule("PM-DQ-01", "Données : Sent supérieur à Generated", "push", "minor")
 def sent_gt_generated(ctx: RuleContext, p: dict):
     df = ctx.business(ctx.push)
     df = df[(df["generated"] > 0) & (df["sent"] > df["generated"])]
@@ -399,7 +399,7 @@ def sent_gt_generated(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-DQ-02", "Conv > Sent (Campaign Name)", "push", "minor")
+@rule("PM-DQ-02", "Données : conversions supérieures à Sent", "push", "minor")
 def conversions_gt_sent(ctx: RuleContext, p: dict):
     df = ctx.push
     if ctx.det.get("exclude_seeding_from_conversion", True):
@@ -416,7 +416,7 @@ def conversions_gt_sent(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-DQ-03", "Fulfillment Success > Conv", "push", "minor")
+@rule("PM-DQ-03", "Données : succès supérieurs aux conversions", "push", "minor")
 def fulfillment_gt_conversions(ctx: RuleContext, p: dict):
     df = ctx.push[(ctx.push["conversions"] > 0) & (ctx.push["fulfillment_success"] > ctx.push["conversions"])]
     for bc, g, first, last, days in _episodes_by_bc(df):
@@ -428,7 +428,7 @@ def fulfillment_gt_conversions(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-DQ-04", "Overall Ctrl Grp = 0", "push", "minor", min_sent=1000)
+@rule("PM-DQ-04", "Données : groupe de contrôle absent", "push", "minor", min_sent=1000)
 def no_control_group(ctx: RuleContext, p: dict):
     df = ctx.conversion_scope(ctx.push)
     df = df[(df["cg_size"] == 0) & (df["sent"] > 0)]
@@ -443,7 +443,7 @@ def no_control_group(ctx: RuleContext, p: dict):
         )
 
 
-@rule("PM-DQ-05", "Colonne entièrement vide", "push", "info")
+@rule("PM-DQ-05", "Données : colonne vide", "push", "info")
 def empty_columns(ctx: RuleContext, p: dict):
     candidates = ["total_con_val", "conversion_value", "unique_conversion_value", "acknowledged", "delivered"]
     for col in candidates:
@@ -455,7 +455,7 @@ def empty_columns(ctx: RuleContext, p: dict):
             )
 
 
-@rule("PM-DQ-06", "Jour manquant", "push", "major")
+@rule("PM-DQ-06", "Données : jour manquant", "push", "major")
 def missing_days(ctx: RuleContext, p: dict):
     start = pd.Timestamp(_period_start(ctx))
     expected = {d.strftime("%Y-%m-%d") for d in pd.date_range(start, pd.Timestamp(ctx.snapshot_date))}

@@ -14,9 +14,9 @@
     <a class="brand" href="#alertes">{{ logo|safe }}<span>CVM Monitor</span></a>
     <nav class="tabs" id="tabs" aria-label="Sections">
       <a href="#alertes" data-tab="alertes">Alertes <span class="count" id="alert-count" hidden></span></a>
+      <a href="#analytics" data-tab="analytics">Analytics</a>
       <a href="#push" data-tab="push">Push Campaigns</a>
       <a href="#inbound" data-tab="inbound">Inbound Marketing</a>
-      <a href="#analytics" data-tab="analytics">Analytics</a>
     </nav>
     <div class="hdr-right">
       <button class="feed-pill" id="feed-pill" title="Santé du flux NEON-dx"><span class="dot"></span><span class="meta">{% if meta.latest %}Données au <strong>{{ meta.latest.date_max[8:10] }}/{{ meta.latest.date_max[5:7] }}/{{ meta.latest.date_max[:4] }}</strong> · fichier du {{ meta.latest.snapshot_date[8:10] }}/{{ meta.latest.snapshot_date[5:7] }}{% else %}Aucune donnée{% endif %}</span></button>

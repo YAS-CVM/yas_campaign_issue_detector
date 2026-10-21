@@ -66,6 +66,7 @@ def make_ctx(cfg, push=None, im=None, snapshot_date=date(2026, 9, 22), prev_push
 
 def run_one(ctx, rule_id):
     from cvm_monitor.detect.engine import run_rules
+    ctx.cfg.raw.setdefault("rules", {}).setdefault(rule_id, {})["enabled"] = True  # règle désactivée en production, testée ici
     anomalies, executed, errors = run_rules(ctx, only={rule_id})
     assert not errors, errors
     return anomalies

@@ -76,29 +76,6 @@
     }).join('');
   }
 
-  /** « À surveiller » : constats chiffrés sur la période, chacun avec son accès direct. */
-  function watchList(idx, rr) {
-    const out = [];
-    const ic = { warn: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
-      cart: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"/><path d="m3 3 18 18"/></svg>',
-      phone: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>',
-      db: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>',
-      clock: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' };
-    const fail = rr.filter(PREF.fail[1]).sort((a, b) => b.ff - a.ff);
-    if (fail.length) out.push({ kind: 'warn', ic: ic.warn, big: `${fail.length} règle${fail.length > 1 ? 's' : ''}`, text: `avec un Failure % ≥ 50 % (≥ 100 tentatives). Pire cas : ${esc(fail[0].name)} : ${F.int(fail[0].ff)} échecs.`, go: 'fail', goLbl: 'Voir les règles en échec →' });
-    const noach = rr.filter(PREF.noach[1]).sort((a, b) => b.imp - a.imp);
-    if (noach.length) out.push({ kind: 'warn', ic: ic.cart, big: `${noach.length} règle${noach.length > 1 ? 's' : ''} sans achat`, text: `malgré ≥ 1 000 impressions, dont ${esc(noach[0].name)} (${F.int(noach[0].imp)} impressions).`, go: 'noach', goLbl: 'Voir les règles →' });
-    const stale = rr.filter(PREF.stale[1]);
-    if (stale.length) out.push({ kind: 'warn', ic: ic.clock, big: `${stale.length} règle${stale.length > 1 ? 's' : ''} non rafraîchie${stale.length > 1 ? 's' : ''}`, text: `Active mais sans refresh depuis plus de ${STALE_H} h au dernier fichier : leurs chiffres peuvent être en retard.`, go: 'stale', goLbl: 'Voir les règles →' });
-    for (const t of KPI.im(I, idx, (i) => I.v('tp', i)).values())
-      if (t.imp > 0 && t.attempts === 0) out.push({ kind: 'info', ic: ic.phone, big: `${esc(t.key)} · taux inconnu`, text: `${F.int(t.imp)} impressions sans fulfillment remonté sur la période. Le taux d'achat n'est pas 0 % : il est non renseigné.` });
-    const sums = KPI.im(I, I.all);
-    const empty = [['acc', 'Accepted'], ['dec', 'Declined'], ['later', 'May be Later'], ['conv', 'Conversions IM']].filter(([k]) => sums[k] === 0).map(([, l]) => l);
-    if (empty.length) out.push({ kind: 'info', ic: ic.db, big: `${empty.length} colonne${empty.length > 1 ? 's' : ''} vide${empty.length > 1 ? 's' : ''}`, text: `${empty.map((x) => `« ${x} »`).join(', ')} ne ${empty.length > 1 ? 'sont' : 'est'} jamais alimentée${empty.length > 1 ? 's' : ''} dans NEON-dx : affichée${empty.length > 1 ? 's' : ''} n/r, jamais 0. Surveillée${empty.length > 1 ? 's' : ''} : un signal apparaîtra dès qu'elle${empty.length > 1 ? 's' : ''} se remplira.` });
-    if (!out.length) return '<div class="watch"><div><div class="ic">✓</div><div class="tx"><div class="big">Rien à signaler</div><p>Aucune règle en échec, sans achat ou en retard sur la période.</p></div></div></div>';
-    return `<div class="watch">${out.map((w) => `<div class="${w.kind === 'warn' ? 'w-warn' : ''}"><div class="ic">${w.ic}</div><div class="tx"><div class="big">${w.big}</div><p>${w.text}</p>${w.go ? `<button class="go" data-watch="${w.go}">${w.goLbl}</button>` : ''}</div></div>`).join('')}</div>`;
-  }
-
   function ruleRows(idx) {
     const by = KPI.im(I, idx, (i) => I.v('rule', i));
     const days = new Map(), offers = new Map(), daily = new Map();
@@ -141,21 +118,11 @@
     App.subtitle(`Offres poussées sur ${esc(tpList.join(' et ') || '–')} via les règles IM NEON-dx · ${F.int(rr.length)} règles · ${nProg} programme${nProg > 1 ? 's' : ''}`);
     el.innerHTML = `
       ${section('Jour J', slot('instant'), { id: 'im-instant', nav: 'Jour J', panel: true, note: 'Écarts vs moyenne des 7 jours précédents. Le Jour J ne concerne que cette section.' })}
-      ${section('À surveiller', `<div data-watch-root>${watchList(idx, rr)}</div>`, { id: 'im-watch', nav: 'À surveiller', note: 'Constats chiffrés sur la période et les filtres de la page. Un lien ouvre directement les règles concernées.' })}
       ${section(`Période · ${F.date(days[0])} → ${F.dateFull(days[days.length - 1])}`, `<div class="split"><div class="wide">${slot('imp')}</div><div class="narrow">${touchpoints(idx)}</div></div><div class="grid g3" style="margin-top:14px">${['fs', 'take', 'fail'].map(slot).join('')}</div>`,
         { id: 'im-period', nav: 'Période', sub: `${F.int(tot.imp)} impressions · ${F.int(tot.fs)} achats · taux ${F.pct(tot.take_rate)} · failure ${F.pct1(tot.failure_rate)}` })}
       ${section('Programmes', slot('progs'), { id: 'im-progs', nav: 'Programmes', panel: true })}
       ${section('Règles IM', slot('rules'), { id: 'im-rules', nav: 'Règles IM', panel: true })}
       ${section('Offres', slot('offers'), { id: 'im-offers', nav: 'Offres', panel: true })}`;
-    // Liens « Voir les règles… » : préfiltre de la carte Règles IM puis défilement jusqu'à elle.
-    el.querySelector('[data-watch-root]').addEventListener('click', (ev) => {
-      const b = ev.target.closest('[data-watch]');
-      if (!b) return;
-      const sec = document.getElementById('im-rules');
-      if (sec.classList.contains('collapsed')) App.toggleSection(sec, true);
-      App.setLocal('rules', { rf: b.dataset.watch });
-      sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
     const W = (id, draw) => App.widget(el.querySelector(`[data-slot=${id}]`), id, draw);
 
     // Instant t : Jour J local à la section

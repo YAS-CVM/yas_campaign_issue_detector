@@ -2,7 +2,7 @@
 'use strict';
 (() => {
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const SEV = { critical: 'Critique', major: 'Majeure', minor: 'Mineure', info: 'Info' };
+  const SEV = { critical: 'Critique', major: 'Élevée', minor: 'À surveiller', info: 'Info' };
   const local = location.protocol === 'file:';
   const status = (ok, label) => `<span class="badge ${ok ? 'ok' : 'trunc'}">${ok ? '✓ ' : ''}${esc(label)}</span>`;
   const kv = (rows) => '<dl class="kv">' + rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v ?? '–'}</dd>`).join('') + '</dl>';

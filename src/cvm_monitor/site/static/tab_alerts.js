@@ -1,17 +1,18 @@
-/* Onglet Alertes : « Que dois-je traiter et prévenir aujourd'hui ? »
- * Santé du flux NEON-dx, état des alertes, file de traitement (acquitter / sourdine / rouvrir), tendance, catalogue. */
+/* Onglet Alertes (page d'accueil) : « Que dois-je traiter et prévenir aujourd'hui ? »
+ * Santé business, état des alertes, listes par périmètre (acquitter / sourdine / rouvrir), catalogue. */
 'use strict';
 (() => {
   const { F, esc, card, section, tile } = App;
   const SEV = ['critical', 'major', 'minor', 'info'];
-  const SEV_FR = { critical: 'Critique', major: 'Majeure', minor: 'Mineure', info: 'Info' };
+  const SEV_FR = { critical: 'Critique', major: 'Élevée', minor: 'À surveiller', info: 'Info' };
   const STATUS_FR = { open: 'Ouverte', ack: 'Acquittée', muted: 'Sourdine', resolved: 'Résolue' };
   const SCOPE_FR = { push: 'Push', im: 'Inbound', snapshot: 'Snapshots', feed: 'Flux NEON-dx' };
   const ENTITY_FR = { broadcast: 'Broadcast', bc_name: 'BC', campaign: 'Campagne', category: 'Catégorie', im_rule: 'Règle IM', touchpoint: 'Touchpoint',
     program: 'Programme', global: 'Global', column: 'Colonne', dataset: 'Jeu de données' };
   // PM-EXE-01 → EXE ; SNP-02 → SNP ; FEED-01 → FEED
+  const QUEUE_SCOPES = ['push', 'im', 'feed', 'snapshot'];
   const FAMILY = (id) => { const p = id.split('-'); return p.length >= 3 ? p[1] : p[0]; };
-  const FAMILY_FR = { EXE: 'Exécution', DLV: 'Livraison', PRF: 'Performance', FUL: 'Fulfillment', IMP: 'Impressions', DQ: 'Qualité des données', SNP: 'Snapshots', FEED: 'Flux NEON-dx' };
+  const FAMILY_FR = { EXE: 'Exécution', DLV: 'Livraison', PRF: 'Performance', FUL: 'Fulfillment', IMP: 'Impressions', DQ: 'Qualité des données', SNP: 'Snapshots', FEED: 'Flux NEON-dx', PUSH: 'Push', INB: 'Inbound', CONV: 'Conversion', OFR: 'Offres' };
   const ACTION = {
     EXE: "Vérifier le broadcast dans NEON-dx : statut, fenêtre de blackout, file d'envoi. Relancer ou clôturer selon le cas.",
     DLV: "Vérifier la route SMS (opérateur, SMSC) et la remontée des accusés de réception (DLR) pour ce BC.",
@@ -51,28 +52,6 @@
     });
   }
 
-  function feedBlock() {
-    const fh = App.feed();
-    const last = fh.last;
-    const shown = fh.signals.filter((x) => !x.hidden);
-    const nWarn = shown.filter((s) => s.level !== 'info').length, nInfo = shown.length - nWarn;
-    const nBad = shown.filter((s) => s.level === 'bad').length;
-    const facts = last ? `<div class="grid tiles" style="margin-bottom:18px">
-      ${tile({ label: 'Dernier fichier', value: `till ${F.dateFull(last.snapshot_date)}`, cls: fh.lag > 3 ? 't-bad' : fh.lag > 1 ? 't-warn' : '',
-        sub: `<b style="color:${fh.lag > 3 ? 'var(--bad)' : fh.lag > 1 ? 'var(--warn)' : 'var(--good)'}">${fh.lag > 1 ? `reçu il y a ${fh.lag} jours` : 'à jour'}</b> · le ${F.dt(last.ingested_at)}` })}
-      ${tile({ label: 'Couverture', value: `${F.date(last.date_min)} → ${F.date(last.date_max)}`, sub: `${F.int(last.push_rows)} lignes Push · ${F.int(last.im_rows)} lignes IM` })}
-      ${tile({ label: 'Fichiers manquants', value: F.int(fh.missing.length), cls: fh.missing.length ? 't-warn' : '', sub: `depuis le ${F.dateFull(App.snaps[0].snapshot_date)} · ${App.snaps.length} reçus` })}
-      ${tile({ label: 'Signaux', value: `${nWarn} <small>+ ${nInfo} info</small>`, sub: `${nBad} critique${nBad > 1 ? 's' : ''} · ${nWarn - nBad} à surveiller` })}
-    </div>` : '';
-    const feedAlerts = App.anomalies.filter((a) => (a.status === 'open' || a.status === 'ack') && /^(FEED|SNP)-/.test(a.rule_id))
-      .sort((x, y) => App.SEV_RANK[y.severity] - App.SEV_RANK[x.severity] || (y.date || '').localeCompare(x.date || ''));
-    const alertsHtml = feedAlerts.length ? `<h3 style="margin:0 0 10px">Alertes ouvertes sur le flux (${feedAlerts.length})</h3><div class="signals" style="margin-bottom:18px">${feedAlerts.slice(0, 8).map((a) =>
-      `<div class="signal"><span><span class="sev ${a.severity}">${SEV_FR[a.severity]}</span></span><a href="#" data-open-drawer="alert:${a.id}"><span class="t">${esc(a.rule_id)} · ${esc(a.rule_name || '')}</span><span class="d">${esc(a.message)}</span></a></div>`).join('')}</div>${feedAlerts.length > 8 ? `<p class="small" style="margin:-8px 0 18px"><a href="#alertes?fam=FEED">Voir les ${feedAlerts.length} alertes du flux →</a></p>` : ''}` : '';
-    const list = shown.length ? `<div class="signals">${shown.map((s) => `<div class="signal"><span>${App.levelPill(s.level)}</span><span><span class="t">${esc(s.title)}</span><span class="d">${esc(s.text)}</span></span></div>`).join('')}</div>`
-      : '<div class="empty">Aucun signal : le flux NEON-dx est nominal.</div>';
-    return facts + alertsHtml + `<h3 style="margin:0 0 10px">Signaux calculés sur les fichiers reçus ${App.help('Fraîcheur, fichiers manquants, lignes en baisse, remplissage des colonnes, fulfillment IM. Les signaux déjà portés par une alerte ouverte ne sont pas répétés.')}</h3>` + list;
-  }
-
   function tiles(st) {
     const act = App.anomalies.filter((a) => a.status === 'open');
     const by = (s) => act.filter((a) => a.severity === s).length;
@@ -108,7 +87,7 @@
       <div class="fgroup"><div class="flbl">Sévérité</div><div class="seg">${opt('sev', '', 'Toutes')}${SEV.map((s) => opt('sev', s, SEV_FR[s])).join('')}</div></div>
       <div class="fgroup"><div class="flbl">Règles</div><select class="field" data-set="scope"><option value="">Périmètre : tous</option>${Object.entries(SCOPE_FR).map(([k, l]) => `<option value="${k}" ${st.scope === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <select class="field" data-set="fam"><option value="">Famille : toutes</option>${fams.map((f) => `<option value="${f}" ${st.fam === f ? 'selected' : ''}>${FAMILY_FR[f] || f}</option>`).join('')}</select>
-      <select class="field" data-set="rule"><option value="">Règle : toutes</option>${rules.map((r) => `<option value="${r}" ${st.rule === r ? 'selected' : ''}>${r} · ${esc(catalog.get(r)?.name || '')}</option>`).join('')}</select></div>
+      <select class="field" data-set="rule"><option value="">Règle : toutes</option>${rules.map((r) => `<option value="${r}" ${st.rule === r ? 'selected' : ''}>${SCOPE_FR[catalog.get(r)?.scope] || ''} · ${esc(catalog.get(r)?.name || r)}</option>`).join('')}</select></div>
 `;
   }
 
@@ -243,7 +222,7 @@
     const link = entityLink(a);
     App.drawer(`<span class="sev ${a.severity}">${SEV_FR[a.severity]}</span> <span class="st ${a.status}">${STATUS_FR[a.status]}</span><h2 style="margin-top:4px">${esc(a.rule_id)} · ${esc(a.rule_name || rule.name || '')}</h2>`,
       `<div class="callout ${a.severity === 'critical' || a.severity === 'major' ? 'bad' : 'info'}">${esc(a.message)}</div>
-      <div><h3>Action recommandée</h3><p style="margin:0">${esc(ACTION[fam] || ACTION.DQ)}</p>${link ? `<p style="margin:8px 0 0">${link}</p>` : ''}</div>
+      <div><h3>Action recommandée</h3><p style="margin:0">${esc(d.action || ACTION[fam] || ACTION.DQ)}</p>${link ? `<p style="margin:8px 0 0">${link}</p>` : ''}</div>
       ${dist}
       <dl class="kv">
         <dt>Entité</dt><dd>${entityLabel(a)}</dd><dt>Catégorie</dt><dd>${esc(a.category || '–')}</dd>
@@ -278,21 +257,6 @@
     }
   }
 
-  function trend(el) {
-    // Nouvelles alertes par fichier, par sévérité : mesure du bruit et des vagues.
-    const files = App.snaps.map((s) => s.snapshot_date);
-    const counts = Object.fromEntries(SEV.map((s) => [s, files.map(() => 0)]));
-    const pos = new Map(files.map((d, i) => [d, i]));
-    for (const a of App.anomalies) { const i = pos.get(a.first_seen_at); if (i != null) counts[a.severity][i]++; }
-    const colors = { critical: '#c62828', major: '#d9620b', minor: '#c99a00', info: '#b9cbee' };
-    Charts.bars(el.querySelector('[data-c=trend]'), { x: files, xfmt: F.date, fmt: F.int, height: 190,
-      series: SEV.map((s) => ({ name: SEV_FR[s], values: counts[s], color: colors[s] })) });
-    const byRule = new Map();
-    for (const a of App.anomalies) if (a.status === 'open' || a.status === 'ack') byRule.set(a.rule_id, (byRule.get(a.rule_id) || 0) + 1);
-    Charts.hbars(el.querySelector('[data-c=rules]'), { fmt: F.int, onClick: (r) => App.set({ rule: r.id, status: null }),
-      rows: [...byRule.entries()].sort((x, y) => y[1] - x[1]).slice(0, 12).map(([id, n]) => ({ id, label: `${id} · ${catalog.get(id)?.name || ''}`, value: n })) });
-  }
-
   function catalogGrid(el, scope) {
     App.grid(el, {
       rows: (App.D.catalog || []).filter((r) => !scope || r.scope === scope), sort: ['id', 'asc'], csv: 'regles', id: (r) => r.id,
@@ -320,32 +284,70 @@
     });
   }
 
+  /** Bandeau « santé business » : dernier jour mature en Push (conversions stabilisées), dernier jour en Inbound, écart vs moyenne 7 j. */
+  function business() {
+    const P = App.P, I = App.I;
+    if (!P.n) return '';
+    const day = App.addDays(App.maxDate, -(App.meta.maturity_days || 3));
+    const pBy = KPI.push(P, P.all.filter((i) => !P.c.seed[i]), (i) => P.v('d', i));
+    const s = pBy.get(day);
+    if (!s) return '';
+    const dl = (map, v, fn, kind, inverse) => { const r = App.refs(map, day, fn); return { v: v == null || r.avg7 == null ? null : kind === 'pts' ? v - r.avg7 : r.avg7 ? v / r.avg7 - 1 : null, kind, inverse }; };
+    const go = (tab) => `data-go="${tab}"`;
+    const tiles = [
+      App.tile({ label: 'Envoyés (Sent)', value: F.int(s.sent), delta: dl(pBy, s.sent, (x) => x.sent), sub: `Push · ${F.dateFull(day)}`, attrs: go('push') }),
+      App.tile({ label: 'Conversions', value: F.int(s.conv), delta: dl(pBy, s.conv, (x) => x.conv), sub: `Push · ${F.dateFull(day)}`, attrs: go('push') }),
+      App.tile({ label: 'Conv % hors seeding', value: F.pct(s.conv_rate), delta: dl(pBy, s.conv_rate, (x) => x.conv_rate, 'pts'), sub: 'Conversions ÷ Sent', attrs: go('push') }),
+      App.tile({ label: 'Valeur des conversions', value: s.val ? F.int(s.val) : '<span class="nr">n/r</span>', delta: dl(pBy, s.val, (x) => x.val), sub: 'Push', attrs: go('push') }),
+    ];
+    if (I.n) {
+      const iBy = KPI.im(I, I.all, (i) => I.v('d', i));
+      const iday = [...iBy.keys()].sort().pop(), i = iBy.get(iday);
+      if (i && i.attempts > 0) {
+        const r = App.refs(iBy, iday, (x) => x.take_rate);
+        tiles.push(App.tile({ label: "Taux d'achat Inbound", value: F.pct(i.take_rate), delta: { v: r.avg7 == null ? null : i.take_rate - r.avg7, kind: 'pts' }, sub: `Inbound · ${F.dateFull(iday)}`, attrs: go('inbound') }));
+      }
+    }
+    return `<div class="grid tiles">${tiles.join('')}</div>`;
+  }
+
+  /** Sections repliées à la première visite seulement : un choix du lecteur (replier / déplier) est ensuite respecté. */
+  function foldByDefault(ids) {
+    try {
+      if (localStorage.getItem('cvm.alertes.folded')) return;
+      localStorage.setItem('cvm.alertes.folded', '1');
+      const set = new Set(JSON.parse(localStorage.getItem('cvm.collapsed') || '[]'));
+      ids.forEach((id) => set.add(`alertes:${id}`));
+      localStorage.setItem('cvm.collapsed', JSON.stringify([...set]));
+    } catch { /* stockage indisponible */ }
+  }
+
   function render(el, st) {
     const list = filtered(st);
     const slot = (id) => `<div data-slot="${id}"></div>`;
     const nOpen = App.anomalies.filter((a) => a.status === 'open').length;
     App.subtitle(`Que traiter et prévenir aujourd'hui ? · fichier du ${F.dateFull(latest?.snapshot_date)} · ${F.int(nOpen)} alertes ouvertes`);
     const notifs = App.D.notifications || [];
+    const byScope = QUEUE_SCOPES.map((sc) => [sc, list.filter((a) => a.scope === sc)]).filter(([, l]) => l.length);
+    const queueSections = byScope.length ? byScope.map(([sc, l]) => section(SCOPE_FR[sc], slot(`queue-${sc}`), {
+      id: `al-q-${sc}`, nav: SCOPE_FR[sc], panel: true, sub: `${F.int(l.length)} alerte(s) · triées par sévérité puis volume`,
+      note: 'Cliquer une ligne pour le détail, cocher pour agir en lot. Les filtres de la page s\'appliquent à cette liste ; le regroupement ne concerne qu\'elle.' })).join('')
+      : `<div class="section panel"><div class="callout ok" style="margin:0"><b>Aucune alerte</b> pour ces filtres.</div></div>`;
+    foldByDefault(['al-catalog', 'al-notif']);
     el.innerHTML = `
-      ${section('Santé du flux NEON-dx', slot('feed'), { id: 'al-feed', nav: 'Santé du flux', panel: true, sub: 'Fraîcheur, fichiers manquants, remplissage des colonnes et fulfillment IM' })}
-      ${section('État des alertes', slot('state'), { id: 'al-state', nav: 'État', sub: 'Cliquer une sévérité filtre la file de traitement' })}
-      ${section('File de traitement', slot('queue'), { id: 'al-queue', nav: 'File de traitement', panel: true, sub: `${F.int(list.length)} alerte(s) · triées par sévérité puis volume`, note: 'Cliquer une ligne pour le détail, cocher pour agir en lot. Les filtres de la page s\'appliquent à cette file ; le regroupement ne concerne qu\'elle.' })}
-      ${section('Tendance et bruit', slot('trend'), { id: 'al-trend', nav: 'Tendance' })}
-      ${section('Catalogue des règles', slot('catalog'), { id: 'al-catalog', nav: 'Catalogue', panel: true, sub: `${(App.D.catalog || []).filter((r) => r.enabled).length} règles actives · alertes levées sur 45 jours`, note: 'Cliquer une règle filtre la file de traitement.' })}
+      ${section('Santé business', slot('biz'), { id: 'al-biz', nav: 'Business', sub: 'Dernier jour mature · écart vs moyenne 7 j · cliquer pour le détail' })}
+      ${section('État des alertes', slot('state'), { id: 'al-state', nav: 'État', sub: 'Cliquer une sévérité filtre les listes' })}
+      ${queueSections}
+      ${section('Catalogue des règles', slot('catalog'), { id: 'al-catalog', nav: 'Catalogue', panel: true, sub: `${(App.D.catalog || []).filter((r) => r.enabled).length} règles actives · alertes levées sur 45 jours`, note: 'Cliquer une règle filtre les listes.' })}
       ${notifs.length ? section(`Journal des notifications`, slot('notif'), { id: 'al-notif', nav: 'Notifications', panel: true, sub: `${notifs.length} envoi(s)` })
         : `<div class="section panel journal" id="al-notif"><div style="display:flex;gap:14px;align-items:center"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg></div>
           <div><h2 style="font-size:18px;margin:0 0 4px">Journal des notifications</h2><span class="muted">Aucune notification envoyée pour l'instant (Teams / e-mail).</span></div></div><a class="btn primary" href="settings.html#canaux">Configurer les canaux</a></div>`}`;
     const W = (id, draw) => App.widget(el.querySelector(`[data-slot=${id}]`), id, draw);
-    W('feed', (w) => { w.innerHTML = feedBlock(); });
+    W('biz', (w) => { w.innerHTML = business(); });
     W('state', (w) => {
       w.innerHTML = tiles(st);  // clics des tuiles : délégation [data-set-many] du socle (position conservée)
     });
-    W('queue', (w, g, l) => { w.innerHTML = '<div class="card flush" data-q></div>'; queue(w.firstChild, { ...st, group: l.group }, list); });
-    W('trend', (w) => {
-      w.innerHTML = `<div class="grid g2">${card('Nouvelles alertes par fichier', '<div class="chart" data-c="trend"></div>', { note: 'Une vague soudaine signale souvent un problème de données plutôt que de campagnes.' })}
-        ${card('Règles les plus déclenchées (actives)', '<div data-c="rules"></div>', { note: 'Cliquer une règle filtre la file de traitement (filtre de la page).' })}</div>`;
-      trend(w);
-    });
+    byScope.forEach(([sc, l]) => W(`queue-${sc}`, (w, g, loc) => { w.innerHTML = '<div class="card flush" data-q></div>'; queue(w.firstChild, { ...st, group: loc.group }, l); }));
     W('catalog', (w, g, l) => { w.innerHTML = '<div class="card flush"></div>'; catalogGrid(w.firstChild, l.scope); });
     if (notifs.length) W('notif', (w) => { w.innerHTML = '<div class="card flush"></div>'; notifGrid(w.firstChild); });
   }

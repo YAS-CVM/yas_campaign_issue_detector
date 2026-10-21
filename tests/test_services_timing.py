@@ -19,7 +19,7 @@ def _rows():
 def test_best_weekday_is_relative_to_bc_norm_and_blackout_hours_are_excluded():
     df = timing.scope(make_push(_rows()), maturity_days=3)
     res = timing.best_times(df, blackout={"start": "19:00", "end": "07:00"}, min_sent=10_000)
-    assert res["best_weekday"]["label"] == "mer."
+    assert res["best_weekday"]["label"] == "Mercredi"
     assert res["best_weekday"]["index"] > 1.2
     assert [r["key"] for r in res["hour"]] == [10]           # 20 h exclu du classement
     assert 20 in res["blackout"] and 10 not in res["blackout"]

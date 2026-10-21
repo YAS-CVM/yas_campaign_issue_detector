@@ -23,7 +23,7 @@ def _when(first: str, last: str, days: int) -> str:
     return f"le {first}" if days == 1 else f"du {first} au {last} ({days} jours)"
 
 
-@rule("BIZ-CONV-01", "BC qui ne convertit plus", "push", "major",
+@rule("BIZ-CONV-01", "Conversion sous la normale du BC", "push", "major",
       min_sent=1000, min_rel_gap=0.4, min_lost=50, major_lost=500, critical_lost=5000)
 def bc_stopped_converting(ctx: RuleContext, p: dict):
     """Conversions/envoi d'un BC sous sa propre normale (P5 des 28 jours précédents), chiffré en conversions et valeur.
@@ -74,7 +74,7 @@ def bc_stopped_converting(ctx: RuleContext, p: dict):
             )
 
 
-@rule("BIZ-OFR-01", "Offre qui ne convertit plus", "im", "major",
+@rule("BIZ-OFR-01", "Achats sous la normale de l'offre", "im", "major",
       min_impressions=1000, min_rel_gap=0.4, min_lost=50, major_lost=500, critical_lost=5000)
 def offer_stopped_converting(ctx: RuleContext, p: dict):
     """Taux d'achat (Fulfillment Success / Impression) d'une offre sous sa propre normale (P5 des 28 jours précédents)."""

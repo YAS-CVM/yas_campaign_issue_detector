@@ -44,8 +44,8 @@ const App = (() => {
     date: (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}` : '–'),
     dateFull: (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '–'),
     dt: (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)} ${s.slice(11, 16)}` : '–'),
-    day: (s) => (s ? ['dim.', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.'][new Date(s + 'T00:00:00Z').getUTCDay()] + ' ' + F.date(s) : '–'),
-    dayLong: (s) => (s ? ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][new Date(s + 'T00:00:00Z').getUTCDay()] + ' ' + F.date(s) : '–'),
+    day: (s) => (s ? ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'][new Date(s + 'T00:00:00Z').getUTCDay()] + ' ' + F.date(s) : '–'),
+    dayLong: (s) => (s ? ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'][new Date(s + 'T00:00:00Z').getUTCDay()] + ' ' + F.date(s) : '–'),
   };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -237,7 +237,7 @@ const App = (() => {
     const [id, qs] = h.split('?');
     const st = {};
     for (const [k, v] of new URLSearchParams(qs || '')) st[k] = !isLocal(k) && (v.includes('|') || (tabs.get(id)?.multi || []).includes(k)) ? v.split('|').filter(Boolean) : v;
-    return { id: tabs.has(id) ? id : 'push', st, explicit: !!qs };
+    return { id: tabs.has(id) ? id : 'alertes', st, explicit: !!qs };
   }
   function hashOf(id, st) {
     const qs = Object.entries(st).filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && !v.length))
@@ -607,6 +607,8 @@ const App = (() => {
         if (w) anchored(loc, () => setLocal(w.dataset.w, { [loc.dataset.local]: loc.dataset.val }));
         return;
       }
+      const goTab = ev.target.closest('[data-go]');
+      if (goTab) { ev.preventDefault(); go(goTab.dataset.go, null, { push: true }); return; }
       const many = ev.target.closest('[data-set-many]');
       if (many) { ev.preventDefault(); anchored(many, () => set(JSON.parse(many.dataset.setMany))); return; }
       const tg = ev.target.closest('.section > .head .sec-toggle, .section > .head .sec-title');
@@ -901,7 +903,7 @@ const App = (() => {
     const toFeed = (ev) => {
       ev.preventDefault();
       if (current !== 'alertes') go('alertes', null, { push: true });
-      requestAnimationFrame(() => { const s = document.getElementById('al-feed'); if (s?.classList.contains('collapsed')) toggleSection(s, true); s?.scrollIntoView({ block: 'start' }); });
+      requestAnimationFrame(() => { const s = document.getElementById('al-q-feed') || document.querySelector('[id^="al-q-"]') || document.getElementById('al-state'); if (s?.classList.contains('collapsed')) toggleSection(s, true); s?.scrollIntoView({ block: 'start' }); });
     };
     pill.addEventListener('click', toFeed);
     document.querySelector('[data-feed]')?.addEventListener('click', toFeed);

@@ -3,7 +3,6 @@
 import pytest
 
 from conftest import REAL_FILES
-from cvm_monitor.ingest.schema import SchemaError
 from cvm_monitor.pipeline import import_upload
 from cvm_monitor.storage import repository as repo
 from cvm_monitor.storage.db import connect

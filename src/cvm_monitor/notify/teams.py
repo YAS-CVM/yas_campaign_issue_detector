@@ -10,7 +10,7 @@ import pandas as pd
 import requests
 
 SEVERITY_COLOR = {"critical": "Attention", "major": "Warning", "minor": "Accent", "info": "Default"}
-SEVERITY_LABEL = {"critical": "Critique", "major": "Majeure", "minor": "Mineure", "info": "Info"}
+SEVERITY_LABEL = {"critical": "Critique", "major": "Élevée", "minor": "À surveiller", "info": "Info"}
 
 
 class TeamsError(RuntimeError):

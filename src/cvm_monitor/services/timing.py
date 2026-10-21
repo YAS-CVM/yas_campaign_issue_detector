@@ -14,7 +14,7 @@ import pandas as pd
 
 from cvm_monitor.analytics import kpi
 
-WEEKDAYS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
+WEEKDAYS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
 
 def blackout_hours(blackout: dict[str, str] | None) -> set[int]:

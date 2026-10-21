@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from ..config import severity_rank
-from . import rules_business, rules_feed, rules_im, rules_push, rules_snapshot  # noqa: F401  (enregistrement des règles)
+from . import rules_business, rules_cvm, rules_feed, rules_im, rules_push, rules_snapshot  # noqa: F401  (enregistrement des règles)
 from .base import REGISTRY, Anomaly, RuleContext
 
 log = logging.getLogger(__name__)

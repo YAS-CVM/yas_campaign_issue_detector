@@ -58,7 +58,7 @@ def _position(r, direction: str) -> str:
     return "seuil fixe" if r["mode"] == "static" else pct.describe(r, direction, fmt_pct)
 
 
-@rule("IM-FUL-01", "Program Rule : Fulfillment Failures", "im", "major",
+@rule("IM-FUL-01", "Échecs d'achat élevés par règle", "im", "major",
       min_attempts=500, max_failure_rate=0.50, critical_failure_rate=0.90, min_abs_gap=0.10)
 def rule_fulfillment_failure(ctx: RuleContext, p: dict):
     window = ctx.det.get("im_lookback_days", 7)
@@ -85,7 +85,7 @@ def rule_fulfillment_failure(ctx: RuleContext, p: dict):
         )
 
 
-@rule("IM-FUL-02", "Hausse du Fulfillment Failures%", "im", "major", min_attempts=5000, min_abs_gap=0.02)
+@rule("IM-FUL-02", "Hausse globale des échecs d'achat", "im", "major", min_attempts=5000, min_abs_gap=0.02)
 def global_failure_rise(ctx: RuleContext, p: dict):
     pc = pct.settings(ctx.det)
     daily = ctx.hist_im.groupby("date")[["fulfillment_success", "fulfillment_failures"]].sum().sort_index()
@@ -110,7 +110,7 @@ def global_failure_rise(ctx: RuleContext, p: dict):
         )
 
 
-@rule("IM-IMP-01", "Impression sans Fulfillment", "im", "major", min_impressions=1000, min_abs_gap=0.05)
+@rule("IM-IMP-01", "Affichée sans achat", "im", "major", min_impressions=1000, min_abs_gap=0.05)
 def impressions_without_success(ctx: RuleContext, p: dict):
     window = ctx.det.get("im_lookback_days", 7)
     agg = _by_rule(_recent(ctx))
@@ -149,7 +149,7 @@ def _weekday_factor(s: pd.Series, evaluated: set[str], min_points: int = 14) -> 
     return pd.Series([coef.get(d, 1.0) for d in idx.dayofweek], index=s.index)
 
 
-@rule("IM-IMP-02", "Chute des Impression", "im", "major", min_impressions=10000, min_rel_gap=0.30)
+@rule("IM-IMP-02", "Chute des impressions", "im", "major", min_impressions=10000, min_rel_gap=0.30)
 def impressions_drop(ctx: RuleContext, p: dict):
     pc = pct.settings(ctx.det)
     current = set(ctx.im["date"])
@@ -179,7 +179,7 @@ def impressions_drop(ctx: RuleContext, p: dict):
                 )
 
 
-@rule("IM-DQ-01", "Conversions Data_IM non alimentées", "im", "info", max_ratio=0.01)
+@rule("IM-DQ-01", "Données : conversions Inbound non alimentées", "im", "info", max_ratio=0.01)
 def conversions_not_tracked(ctx: RuleContext, p: dict):
     success, conv = ctx.im["fulfillment_success"].sum(), ctx.im["conversions"].sum()
     if success > 0 and conv / success < p["max_ratio"]:
@@ -191,7 +191,7 @@ def conversions_not_tracked(ctx: RuleContext, p: dict):
         )
 
 
-@rule("IM-DQ-02", "Touchpoint sans Fulfillment", "im", "minor", min_impressions=1000)
+@rule("IM-DQ-02", "Touchpoint sans achat", "im", "minor", min_impressions=1000)
 def touchpoint_without_result(ctx: RuleContext, p: dict):
     agg = ctx.im.groupby("touchpoint")[["impressions", "fulfillment_success", "fulfillment_failures"]].sum()
     agg = agg[(agg["impressions"] >= p["min_impressions"])
@@ -204,7 +204,7 @@ def touchpoint_without_result(ctx: RuleContext, p: dict):
         )
 
 
-@rule("IM-DQ-03", "Last Refresh Date Time en retard", "im", "major", max_lag_hours=48)
+@rule("IM-DQ-03", "Données Inbound en retard", "im", "major", max_lag_hours=48)
 def stale_refresh(ctx: RuleContext, p: dict):
     """Program Rules Active du fichier dont le dernier rafraîchissement date de plus de `max_lag_hours`.
 

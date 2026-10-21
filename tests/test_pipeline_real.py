@@ -39,11 +39,10 @@ def test_known_issues_are_found(db):
     _, conn, _, _ = db
     df = repo.anomalies_df(conn, status=["open"])
     msgs = " | ".join(df["message"])
-    stuck = df[df["rule_id"] == "PM-EXE-01"]["entity_key"]
-    assert stuck.str.startswith("Flow_Nursery_Day0_Active30_Dummy BC").any()
-    assert (df["rule_id"] == "IM-FUL-01").any() and "NBO_Illimax 8000F" in msgs
-    assert ((df["rule_id"] == "PM-DLV-02") & (df["date"] == "2026-09-17")).any()
-    assert (df["rule_id"] == "IM-DQ-02").any()  # YAS APP sans activation
+    assert (df["rule_id"] == "CVM-INB-02").any() and "Illimax" in msgs  # échecs d'achat élevés
+    assert not df["message"].str.contains("Dummy BC").any()  # BC techniques exclus des règles CVM
+    assert not df["rule_id"].isin(["PM-EXE-01", "IM-FUL-01"]).any()  # remplacées par les règles CVM
+    assert not df["rule_id"].isin(["PM-DLV-02", "IM-DQ-02"]).any()  # règles désactivées : aucune alerte
 
 
 def test_frozen_volumes_not_revised(db):

@@ -216,6 +216,7 @@ def sync_anomalies(
     seen: set[str] = set()
 
     for a in anomalies:
+        reopen = False
         fp = a.fingerprint
         if fp in seen:
             continue
@@ -237,6 +238,7 @@ def sync_anomalies(
         status = row["status"]
         if status == "resolved":
             status = "open"
+            reopen = True  # nouvel épisode : « Depuis » repart de ce fichier
             result.reopened.append(row["id"])
         elif severity_rank(a.severity) > severity_rank(row["severity"]) and status != "muted":
             status = "open"  # une aggravation annule l'acquittement
@@ -245,9 +247,10 @@ def sync_anomalies(
             result.ongoing.append(row["id"])
         sets = ", ".join(f"{k}=?" for k in values)
         conn.execute(
-            f"UPDATE anomalies SET {sets}, status=?, last_seen_snapshot=?, last_seen_at=?, occurrences=occurrences+1,"
-            " resolved_at=NULL WHERE id=?",
-            list(values.values()) + [status, snap_id, snap_date, row["id"]],
+            f"UPDATE anomalies SET {sets}, status=?, last_seen_snapshot=?, last_seen_at=?,"
+            + (" occurrences=1, first_seen_at=?, first_seen_snapshot=?," if reopen else " occurrences=occurrences+1,")
+            + " resolved_at=NULL WHERE id=?",
+            list(values.values()) + [status, snap_id, snap_date] + ([snap_date, snap_id] if reopen else []) + [row["id"]],
         )
 
     # Résolution : anomalies actives d'une règle exécutée, dans la période couverte, non revues.
@@ -255,7 +258,7 @@ def sync_anomalies(
         placeholders = ",".join("?" * len(executed_rules))
         rows = conn.execute(
             f"SELECT id, fingerprint FROM anomalies WHERE status IN ('open','ack') AND rule_id IN ({placeholders})"
-            " AND date >= ? AND date <= ?",
+            " AND (rule_id LIKE 'CVM-%' OR (date >= ? AND date <= ?))",  # CVM-* : alertes d'état, sans date propre
             [*executed_rules, snapshot["date_min"], snapshot["date_max"]],
         ).fetchall()
         for r in rows:
@@ -263,6 +266,18 @@ def sync_anomalies(
                 conn.execute("UPDATE anomalies SET status='resolved', resolved_at=? WHERE id=?", (snap_date, r["id"]))
                 result.resolved.append(r["id"])
     return result
+
+
+def resolve_rules(conn: sqlite3.Connection, rule_ids: list[str], snap_date: str) -> list[int]:
+    """Résout les anomalies actives de règles désactivées (elles ne seront plus ré-évaluées)."""
+    if not rule_ids:
+        return []
+    marks = ",".join("?" * len(rule_ids))
+    ids = [r["id"] for r in conn.execute(
+        f"SELECT id FROM anomalies WHERE status IN ('open','ack') AND rule_id IN ({marks})", rule_ids)]
+    for i in ids:
+        conn.execute("UPDATE anomalies SET status='resolved', resolved_at=? WHERE id=?", (snap_date, i))
+    return ids
 
 
 def anomalies_df(conn: sqlite3.Connection, status: list[str] | None = None, ids: list[int] | None = None) -> pd.DataFrame:

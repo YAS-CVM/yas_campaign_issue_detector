@@ -10,7 +10,6 @@
     { key: 'st', label: 'Statut', T: 'P', dim: 'st' },
   ];
   const SEED_FR = { '': 'Tout', no: 'Hors seeding', only: 'Seeding seul' };
-  const lastSnapIdx = App.snaps.length - 1;
   const pDates = P.d.d || [];
   const lastPushDate = pDates[pDates.length - 1];
 
@@ -63,29 +62,6 @@
     return { html: `<div class="grid tiles">${tiles.join('')}</div>`, byDay };
   }
 
-  /** Broadcasts du dernier fichier qui ne sont pas « Completed », et transitions de statut depuis le fichier précédent. */
-  function execution(st) {
-    const cur = App.rows(P, st, DIMS, { period: false, where: (i) => !P.c.frozen[i] });
-    const counts = new Map();
-    for (const i of cur) counts.set(P.v('st', i), (counts.get(P.v('st', i)) || 0) + 1);
-    const known = ['Completed', 'Delivering', 'Paused', 'Aborted', 'Delivery Stalled', 'Blackout Pause', 'Blackout Expired', 'Targeting', 'Render Scheduled'];
-    const chips = (on) => [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s, n]) =>
-      `<button class="pill ${on === s ? 'on' : ''}" data-local="st" data-val="${on === s ? '' : esc(s)}" title="Filtrer cette carte sur ce statut"><span class="d" style="background:${App.stDot(s)}"></span>${esc(s)}${known.includes(s) ? '' : ' (nouveau)'}<span class="n">${F.int(n)}</span></button>`).join('');
-    const open = (on) => cur.filter((i) => (on ? P.v('st', i) === on : P.v('st', i) !== 'Completed')).map((i) => brow(i));
-    // Transitions : version au dernier fichier dont le statut diffère de la version précédente.
-    const ids = new Set(cur.map((i) => P.c.id[i]));
-    const trans = [];
-    for (let k = 1; k < V.n; k++) {
-      if (V.c.snap[k] !== lastSnapIdx || V.c.id[k] !== V.c.id[k - 1] || !ids.has(V.c.id[k])) continue;
-      const a = V.v('st', k - 1), b = V.v('st', k);
-      if (a !== b) trans.push({ id: V.c.id[k], from: a, to: b, since: App.snaps[V.c.snap[k - 1]]?.snapshot_date });
-    }
-    const pos = new Map(cur.map((i) => [P.c.id[i], i]));
-    return {
-      chips, open, total: cur.length, trans: trans.map((t) => ({ ...t, ...brow(pos.get(t.id)) })),
-      newCount: (() => { let n = 0; for (let k = 0; k < V.n; k++) if (V.c.snap[k] === lastSnapIdx && (k === 0 || V.c.id[k - 1] !== V.c.id[k])) n++; return n; })(),
-    };
-  }
   const brow = (i) => ({ _key: P.c.id[i], id: P.c.id[i], i, date: P.v('d', i), name: P.c.name[i], bc: P.v('bc', i), camp: P.v('camp', i), cat: P.v('cat', i), status: P.v('st', i),
     gen: P.c.gen[i], sent: P.c.sent[i], ack: P.c.ack[i], dlv: P.c.dlv[i], conv: P.c.conv[i], age: P.c.age[i], seed: P.c.seed[i], frozen: P.c.frozen[i],
     dlv_rate: KPI.rate(P.c.dlv[i], P.c.sent[i]), conv_rate: KPI.rate(P.c.conv[i], P.c.sent[i]), comp: KPI.completion('conv', P.c.age[i]) });
@@ -196,7 +172,6 @@
     const idx = rowsFor(st);
     const days = App.periodDates(st).filter((d) => d <= lastPushDate);
     const tot = KPI.push(P, idx);
-    const ex = execution(st);
     const slot = (id) => `<div data-slot="${id}"></div>`;
     const nCats = new Set(idx.map((i) => P.v('cat', i))).size;
     App.subtitle(`Envois, livraison et conversions · ${F.int(tot.n)} broadcasts sur ${days.length} jours · ${nCats} catégorie${nCats > 1 ? 's' : ''}`);
@@ -204,9 +179,6 @@
     el.innerHTML = `
       ${section('Jour J', slot('instant'), { id: 'push-instant', nav: 'Jour J', panel: true,
         note: 'Écarts vs moyenne des 7 jours précédents ; « même jour sem. » : vs le même jour des 4 semaines précédentes. Conversions en italique : en cours de maturation. Le Jour J ne concerne que cette section.' })}
-      ${section('Exécution au dernier fichier', `${slot('exec')}${slot('trans')}`, { id: 'push-exec', nav: 'Exécution', panel: true,
-        note: 'Broadcasts du dernier fichier qui ne sont pas « Completed ». Cliquer un statut filtre ce tableau uniquement.',
-        sub: `Fichier du ${F.date(App.snaps[lastSnapIdx]?.snapshot_date)} · ${F.int(ex.total)} broadcasts · ${F.int(ex.open().length)} non « Completed » · ${F.int(ex.newCount)} nouveaux · ${ex.trans.length ? `${ex.trans.length} transition(s) de statut` : 'aucune transition de statut'}` })}
       ${section(`Période · ${F.date(days[0])} → ${F.dateFull(days[days.length - 1])}`, `<div class="split"><div class="narrow">${slot('funnel')}</div><div class="wide">${slot('sent')}</div></div><div class="grid g2" style="margin-top:14px">${['rates', 'conv', 'net', 'seed'].map(slot).join('')}</div>`,
         { id: 'push-period', nav: 'Période', sub: `${F.int(tot.sent)} envoyés · Ack ${F.pct1(tot.ack_rate)} · Delivery ${F.pct1(tot.delivery_rate)} · Conv % ${F.pct(orgTot.conv_rate)} · Net ${F.pts(orgTot.net_conv_rate)}` })}
       ${section('Catégories × jour', slot('heat'), { id: 'push-heat', nav: 'Heatmap', panel: true })}
@@ -223,25 +195,6 @@
       w.innerHTML = card(`<span style="font-size:15px;font-weight:700;color:var(--ink-2)">${F.dayLong(day)}</span>`, db.html, {
         local: [day !== lastPushDate ? App.localBadge(`Jour J : ${F.date(day)}`, 'day') : '<span class="badge yel">Dernier rapport disponible</span>'],
         right: App.dayNav(pDates, day, lastPushDate) });
-    });
-
-    // Exécution : pastille de statut = filtre local de la carte
-    const bcols = [
-      { key: 'status', label: 'Statut', html: (r) => App.stPill(r.status) },
-      { key: 'date', label: 'Envoi', fmt: (v, r) => `${F.date(v)} <span class="small muted">J+${r.age}</span>` },
-      { key: 'bc', label: 'BC', html: (r) => `<span class="ell" title="${esc(r.bc)}">${esc(r.bc)}</span> ${App.alertBadge('broadcast', r.id)}` },
-      { key: 'gen', label: 'Generated', num: true, fmt: (v, r) => (v ? F.int(v) : '<span class="nr">n/r</span>') },
-      { key: 'sent', label: 'Sent', num: true, fmt: F.int },
-    ];
-    W('exec', (w, g, l) => {
-      const rows = ex.open(l.st);
-      w.innerHTML = `<div class="pills" role="group" aria-label="Filtrer par statut">${ex.chips(l.st) || '<span class="faint">aucun</span>'}</div><div data-g="open"></div>`;
-      App.grid(w.querySelector('[data-g=open]'), { rows, columns: bcols, sort: ['gen', 'desc'], search: false, limit: 50, onRow: (r) => openBroadcast(r.id), empty: l.st ? 'Aucun broadcast dans ce statut' : 'Tous les broadcasts sont « Completed »' });
-    });
-    if (ex.trans.length) W('trans', (w) => {
-      w.innerHTML = `<div style="margin-top:18px">${card('Transitions de statut depuis le fichier précédent', '<div data-g="trans"></div>', { note: 'Ex. Blackout Pause → Blackout Expired : la fenêtre a expiré, le volume ciblé n\'est jamais parti.' })}</div>`;
-      App.grid(w.querySelector('[data-g=trans]'), { rows: ex.trans, search: false, limit: 50, onRow: (r) => openBroadcast(r.id), empty: 'Aucun changement de statut',
-        columns: [{ key: 'from', label: 'Avant', html: (r) => App.stPill(r.from) }, { key: 'to', label: 'Maintenant', html: (r) => App.stPill(r.to) }, ...bcols.slice(1)] });
     });
 
     // Période
